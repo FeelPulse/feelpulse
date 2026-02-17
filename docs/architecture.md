@@ -22,39 +22,58 @@ package "FeelPulse" {
   component [Command Handler\ninternal/command] as CH
   component [Scheduler\ninternal/scheduler] as SC
   component [Tool Registry\ninternal/tools] as TR
+  component [Skills Manager\ninternal/skills] as SK
   component [Usage Tracker\ninternal/usage] as UT
   component [Config Watcher\ninternal/watcher] as CW
+  component [Heartbeat Service\ninternal/heartbeat] as HB
+  component [Rate Limiter\ninternal/ratelimit] as RL
+  component [TTS Speaker\ninternal/tts] as TTS
+  component [SQLite Store\ninternal/store] as DB
 }
 
 cloud "Channels" {
   component [Telegram Bot\ninternal/channel] as TG
+  component [Web Dashboard\n/dashboard] as DASH
+  component [OpenAI API\n/v1/chat/completions] as OAI
 }
 
 cloud "AI Providers" {
   component [Anthropic Claude\napi.anthropic.com] as ANT
 }
 
+database "SQLite\n~/.feelpulse/sessions.db" as SQL
+
 database "Workspace\n~/.feelpulse/workspace/" as WS {
   file "SOUL.md"
   file "USER.md"
   file "MEMORY.md"
+  folder "skills/"
 }
 
 file "config.yaml\n~/.feelpulse/" as CFG
 
 User --> TG : message
+User --> OAI : API request
 TG --> GW : handleMessage()
+OAI --> GW : handleOpenAI()
+GW --> RL : rate check
 GW --> CH : parse commands
 GW --> SS : get/set history
+SS --> DB : persist
 GW --> AR : process(messages)
 AR --> ANT : streaming API
 AR --> TR : tool calls
+SK --> TR : register tools
 MM --> WS : load files
 MM --> AR : inject system prompt
+SC --> DB : persist reminders
 SC --> TG : scheduled reminders
+HB --> TG : proactive messages
 CW --> CFG : watch for changes
 CW --> GW : reload config
 UT --> SS : track token usage
+GW --> TTS : speak response
+DASH --> GW : status
 
 CLI --> GW : start
 CLI --> CFG : init/auth
@@ -77,33 +96,46 @@ skinparam backgroundColor #FAFAFA
 
 participant "Telegram" as TG
 participant "Gateway" as GW
+participant "RateLimiter" as RL
 participant "CommandHandler" as CH
 participant "SessionStore" as SS
 participant "AgentRouter" as AR
+participant "TTS" as TTS
 participant "Telegram" as TG2
 
 TG -> GW : handleMessage(msg)
 activate GW
 
-GW -> CH : IsCommand(msg.Text)
-alt is slash command
-  CH -> GW : handleCommand(msg) → reply
-  GW -> TG2 : sendMessage(reply)
-else regular message
-  GW -> SS : GetOrCreate(channelID+userID)
-  SS -> GW : session (with history)
-  
-  GW -> GW : compactIfNeeded(history)
-  GW -> AR : Process(messages)
-  activate AR
-  AR -> AR : buildSystemPrompt()
-  note right: SOUL.md + USER.md\n+ MEMORY.md injected
-  AR --> GW : AgentResponse
-  deactivate AR
-  
-  GW -> SS : AddMessage(userMsg)
-  GW -> SS : AddMessage(botReply)
-  GW -> TG2 : sendMessage(reply)
+GW -> RL : Allow(userID)
+alt rate limited
+  GW -> TG2 : sendMessage("Rate limited")
+else allowed
+  GW -> CH : IsCommand(msg.Text)
+  alt is slash command
+    CH -> GW : handleCommand(msg) → reply
+    GW -> TG2 : sendMessage(reply)
+  else regular message
+    GW -> SS : GetOrCreate(channelID+userID)
+    SS -> GW : session (with history)
+    
+    GW -> GW : compactIfNeeded(history)
+    GW -> AR : Process(messages)
+    activate AR
+    AR -> AR : buildSystemPrompt()
+    note right: SOUL.md + USER.md\n+ MEMORY.md + Profile
+    AR --> GW : AgentResponse
+    deactivate AR
+    
+    GW -> SS : AddMessage(userMsg)
+    GW -> SS : AddMessage(botReply)
+    GW -> SS : Persist()
+    
+    alt TTS enabled
+      GW -> TTS : Speak(reply.Text)
+    end
+    
+    GW -> TG2 : sendMessage(reply)
+  end
 end
 
 deactivate GW
@@ -122,6 +154,8 @@ skinparam backgroundColor #FAFAFA
 package "internal/agent" {
   class Router {
     +Process(messages) AgentResponse
+    +ProcessWithHistory([]Message) AgentResponse
+    +SetSystemPromptBuilder(func)
     +Name() string
   }
 
@@ -141,6 +175,10 @@ package "internal/agent" {
     +Chat(messages) AgentResponse
   }
 
+  class Summarizer {
+    +SummarizeConversation(messages) string
+  }
+
   enum AuthMode {
     AuthModeAPIKey
     AuthModeOAuth
@@ -158,6 +196,7 @@ FailoverAgent ..|> Agent
 FailoverAgent --> Agent : primary
 FailoverAgent --> Agent : fallback
 AnthropicClient --> AuthMode
+Summarizer --> AnthropicClient
 @enduml
 ```
 
@@ -167,7 +206,7 @@ AnthropicClient --> AuthMode
 
 ### Session Store (`internal/session`)
 
-In-memory conversation history, keyed by `channel:userID`.
+In-memory conversation history with SQLite persistence, keyed by `channel:userID`.
 
 ```plantuml
 @startuml session
@@ -176,33 +215,82 @@ skinparam backgroundColor #FAFAFA
 
 class Store {
   -sessions map[string]*Session
+  -persister Persister
   +GetOrCreate(key) *Session
   +Get(key) *Session
   +Delete(key)
+  +SetPersister(p)
+  +AddMessageAndPersist(ch, uid, msg)
 }
 
 class Session {
   +Key string
   +Messages []Message
   +Model string
+  +TTSEnabled *bool
+  +Profile string
   +CreatedAt time.Time
   +UpdatedAt time.Time
   +AddMessage(msg)
   +Clear()
-  +Recent(n) []Message
+  +SetTTS(enabled)
+  +SetProfile(name)
+  +SetModel(model)
 }
 
-class compact {
-  +CompactIfNeeded(messages, maxTokens, summarizer) []Message
+class Compactor {
+  -summarizer Summarizer
+  -maxTokens int
+  +CompactIfNeeded(messages) []Message
   +EstimateTokens(messages) int
 }
 
+interface Persister {
+  +Save(key, messages, model) error
+  +Load(key) (messages, model, error)
+  +Delete(key) error
+  +ListKeys() ([]string, error)
+}
+
 Store "1" --> "*" Session
-Session --> compact : uses
+Store --> Persister : persists via
+Session --> Compactor : uses
 @enduml
 ```
 
 **Compaction:** When conversation exceeds `maxContextTokens` (default 80k), older messages are summarized via a Claude API call and replaced with a single summary message.
+
+### SQLite Store (`internal/store`)
+
+Persists sessions and reminders to SQLite database.
+
+```plantuml
+@startuml store
+!theme plain
+skinparam backgroundColor #FAFAFA
+
+class SQLiteStore {
+  -db *sql.DB
+  +Save(key, messages, model) error
+  +Load(key) (messages, model, error)
+  +Delete(key) error
+  +ListKeys() []string
+  +SaveReminder(r) error
+  +DeleteReminder(id) error
+  +LoadReminders() []*ReminderData
+  +CleanExpiredReminders() int64
+}
+
+database "sessions.db" as DB
+
+note bottom of DB
+  sessions: key, messages, model, updated_at
+  reminders: id, channel, user_id, message, fire_at, created
+end note
+
+SQLiteStore --> DB : reads/writes
+@enduml
+```
 
 ### Memory Manager (`internal/memory`)
 
@@ -220,6 +308,9 @@ class Manager {
   -memory string
   +Load() error
   +BuildSystemPrompt(base string) string
+  +Soul() string
+  +User() string
+  +Memory() string
 }
 
 note as WS
@@ -238,44 +329,61 @@ Manager --> WS : reads files
 2. Base system prompt from `config.yaml`
 3. `USER.md` section
 4. `MEMORY.md` section
+5. Profile content (if `/profile use <name>`)
 
-### Tool Registry (`internal/tools`)
+### Skills System (`internal/skills`)
 
-Extensible tool system for function calling.
+Extensible tool system for function calling via SKILL.md files.
 
 ```plantuml
-@startuml tools
+@startuml skills
 !theme plain
 allowmixing
 skinparam backgroundColor #FAFAFA
 
-class Registry {
-  -tools map[string]*Tool
-  +Register(tool)
-  +Get(name) *Tool
-  +List() []*Tool
-  +Execute(name, params) string
+class Manager {
+  -dir string
+  -skills []*Skill
+  -registry *Registry
+  +Reload() error
+  +ListSkills() []*Skill
+  +GetSkill(name) *Skill
+  +Registry() *Registry
 }
 
-class Tool {
+class Loader {
+  -dir string
+  +Load() []*Skill
+}
+
+class Skill {
   +Name string
   +Description string
-  +Parameters []Parameter
-  +Handler func(ctx, params) string
+  +Parameters []Param
+  +Executable string
+  +Dir string
+  +ToTool() *Tool
 }
 
-rectangle "web_search\n(DuckDuckGo / Brave)" as WS #dae8fc
-rectangle "exec\n(Run shell commands)" as EX #dae8fc
+note as SKILL
+  <b>~/.feelpulse/workspace/skills/</b>
+  weather/
+    SKILL.md
+    run.sh
+  notes/
+    SKILL.md
+end note
 
-Registry "1" --> "*" Tool
-Tool --> WS : built-in
-Tool --> EX : built-in
+Manager --> Loader : loads via
+Loader --> SKILL : parses
+Manager --> Skill : manages
+Skill --> Tool : converts to
 @enduml
 ```
 
 ### Scheduler (`internal/scheduler`)
 
-Cron-style reminder system, runs in a background goroutine.
+Persistent reminder system with SQLite backing.
 
 ```plantuml
 @startuml scheduler
@@ -283,23 +391,131 @@ Cron-style reminder system, runs in a background goroutine.
 skinparam backgroundColor #FAFAFA
 
 class Scheduler {
-  -reminders []*Reminder
-  -notify func(chatID, text)
-  +Add(chatID, duration, message) string
-  +Remove(id)
-  +List(chatID) []*Reminder
-  +Start(ctx)
+  -reminders map[string]*Reminder
+  -persister ReminderPersister
+  -handler ReminderHandler
+  +AddReminder(ch, uid, duration, msg) (id, error)
+  +Cancel(id) bool
+  +List(ch, uid) []*Reminder
+  +SetPersister(p) error
+  +Start()
+  +Stop()
 }
 
 class Reminder {
   +ID string
-  +ChatID string
+  +Channel string
+  +UserID string
   +Message string
   +FireAt time.Time
+  +Created time.Time
+  +String() string
+}
+
+interface ReminderPersister {
+  +SaveReminder(r) error
+  +DeleteReminder(id) error
+  +LoadReminders() []*ReminderData
 }
 
 Scheduler "1" --> "*" Reminder
+Scheduler --> ReminderPersister : persists via
 Scheduler --> "Telegram\nsendMessage" : fires notification
+@enduml
+```
+
+**Features:**
+- `/remind in 30m call mom` — relative time
+- `/remind at 14:30 meeting` — absolute time
+- `/cancel <id>` — cancel by ID prefix
+- Persists to SQLite (survives restarts)
+
+### TTS Speaker (`internal/tts`)
+
+Text-to-speech output with auto-detection.
+
+```plantuml
+@startuml tts
+!theme plain
+skinparam backgroundColor #FAFAFA
+
+class Speaker {
+  +Command string
+  +Speak(text) error
+  +Available() bool
+  +BuildCommand(text) (cmd, args, stdin)
+  +SanitizeText(text) string
+}
+
+note as CMDS
+  Auto-detects:
+  - say (macOS)
+  - espeak-ng
+  - espeak
+  - festival
+end note
+
+Speaker --> CMDS : uses first available
+@enduml
+```
+
+**Text sanitization:**
+- Removes emoji, markdown, links
+- Handles code blocks
+- Collapses whitespace
+
+### Heartbeat Service (`internal/heartbeat`)
+
+Proactive periodic check system.
+
+```plantuml
+@startuml heartbeat
+!theme plain
+skinparam backgroundColor #FAFAFA
+
+class Service {
+  -config *Config
+  -workspacePath string
+  -users map[string]map[int64]bool
+  -callback func(ch, uid, msg)
+  +RegisterUser(ch, uid)
+  +SetCallback(fn)
+  +Start()
+  +Stop()
+}
+
+note as HB
+  Reads HEARTBEAT.md from workspace
+  Triggers periodic messages
+  Registers active users from Telegram
+end note
+
+Service --> HB
+@enduml
+```
+
+### Rate Limiter (`internal/ratelimit`)
+
+Per-user message rate limiting.
+
+```plantuml
+@startuml ratelimit
+!theme plain
+skinparam backgroundColor #FAFAFA
+
+class Limiter {
+  -rate int
+  -users map[string]*userState
+  +Allow(userID) bool
+}
+
+note as RL
+  rate = messages per minute
+  0 = disabled
+  Sliding window algorithm
+end note
+
+Limiter --> RL
 @enduml
 ```
 
@@ -321,17 +537,24 @@ start
 
 |Gateway|
 :Receive update;
+:Check rate limit;
+if (rate limited?) then (yes)
+  :Return "Rate limited";
+  stop
+endif
+
 if (slash command?) then (yes)
-  :Parse command\n(/new, /model, /usage...);
+  :Parse command\n(/new, /tts, /profile...);
   :Execute command handler;
   :Return response;
 else (no)
   :Load session history;
+  :Load session preferences\n(model, TTS, profile);
   if (history > maxTokens?) then (yes)
     :Compact old messages\n(summarize via Claude);
   endif
   :Build messages array\n[system + history + new];
-  :Add workspace context\n(SOUL/USER/MEMORY);
+  :Add workspace context\n(SOUL/USER/MEMORY/Profile);
 endif
 
 |Agent|
@@ -342,6 +565,13 @@ endif
 
 |Gateway|
 :Save messages to session;
+:Persist to SQLite;
+
+if (TTS enabled for session?) then (yes)
+  :Sanitize text;
+  :Call TTS command;
+endif
+
 :Send reply to Telegram;
 
 |Telegram|
@@ -391,20 +621,36 @@ agent:
   authToken: ""       # sk-ant-oat-... (Claude subscription)
   maxTokens: 4096
   maxContextTokens: 80000
+  rateLimit: 10       # messages per minute per user (0 = disabled)
+  fallbackModel: claude-3-haiku-20240307
   system: "You are a helpful AI assistant."
 
 workspace:
   path: ~/.feelpulse/workspace  # SOUL.md, USER.md, MEMORY.md
+  profiles:
+    friendly: ~/.feelpulse/workspace/friendly-soul.md
+    professional: ~/.feelpulse/workspace/professional-soul.md
 
 channels:
   telegram:
     enabled: true
     token: ""
+    allowedUsers:       # empty = allow all
+      - alice
+      - bob
 
 hooks:
   enabled: true
   token: ""
   path: /hooks
+
+heartbeat:
+  enabled: false
+  intervalMinutes: 60
+
+tts:
+  enabled: false
+  command: ""           # auto-detects: espeak, say, festival
 ```
 
 ---
@@ -414,7 +660,8 @@ hooks:
 ```
 feelpulse/
 ├── cmd/feelpulse/
-│   └── main.go              # CLI entry point (start/init/auth/tui/status)
+│   ├── main.go              # CLI entry point
+│   └── service.go           # systemd service management
 ├── internal/
 │   ├── agent/
 │   │   ├── agent.go         # Router + Agent interface
@@ -422,33 +669,47 @@ feelpulse/
 │   │   ├── failover.go      # Automatic model fallback
 │   │   └── summarizer.go    # Conversation compaction helper
 │   ├── channel/
-│   │   └── telegram.go      # Telegram long-polling bot
+│   │   ├── telegram.go      # Telegram long-polling bot
+│   │   └── keyboard.go      # Inline keyboards, bot commands
 │   ├── command/
 │   │   └── command.go       # Slash command handler
 │   ├── config/
 │   │   └── config.go        # YAML config load/save
 │   ├── gateway/
-│   │   └── gateway.go       # Central message orchestrator
-│   ├── hook/
-│   │   └── hook.go          # Webhook HTTP handlers
+│   │   ├── gateway.go       # Central orchestrator
+│   │   ├── dashboard.go     # Web dashboard
+│   │   └── openai.go        # OpenAI-compatible API
+│   ├── heartbeat/
+│   │   └── heartbeat.go     # Proactive check service
 │   ├── memory/
 │   │   └── memory.go        # Workspace file loader
+│   ├── ratelimit/
+│   │   └── limiter.go       # Per-user rate limiting
 │   ├── scheduler/
-│   │   └── scheduler.go     # Cron reminders
+│   │   └── scheduler.go     # Persistent reminders
 │   ├── session/
-│   │   ├── session.go       # In-memory conversation store
+│   │   ├── session.go       # Conversation store
 │   │   └── compact.go       # Context compaction
+│   ├── skills/
+│   │   └── skills.go        # SKILL.md loader + executor
+│   ├── store/
+│   │   └── sqlite.go        # SQLite persistence
 │   ├── tools/
 │   │   ├── tools.go         # Tool registry
-│   │   └── builtins.go      # exec, web_search
+│   │   └── builtins.go      # Built-in tools
+│   ├── tts/
+│   │   └── tts.go           # Text-to-speech
+│   ├── tui/
+│   │   └── model.go         # Terminal UI (bubbletea)
 │   ├── usage/
 │   │   └── usage.go         # Token usage tracking
 │   └── watcher/
 │       └── watcher.go       # Config file hot-reload
 ├── pkg/types/
-│   └── message.go           # Shared types (Message, AgentResponse)
+│   └── message.go           # Shared types
 ├── docs/
-│   └── architecture.md      # This file
+│   ├── architecture.md      # This file
+│   └── c4-architecture.md   # C4 model diagrams
 ├── TODO.md
 ├── Makefile
 ├── go.mod
@@ -457,28 +718,33 @@ feelpulse/
 
 ---
 
-## Available Commands
+## API Endpoints
 
-| Command | Description |
-|---------|-------------|
-| `make start` | Build and start (foreground) |
-| `make start-bg` | Build and start (background) |
-| `make stop` | Stop background process |
-| `make restart` | Restart background process |
-| `make logs` | Tail live logs |
-| `make tui` | Launch terminal chat UI |
-| `make auth` | Configure API key or setup-token |
-| `make test` | Run all tests |
-| `make dev` | Format + vet + build + start |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with status |
+| `/dashboard` | GET | Web status dashboard |
+| `/v1/chat/completions` | POST | OpenAI-compatible API |
+| `/hooks/*` | POST | Webhook handlers |
 
-### Slash Commands (in Telegram)
+---
+
+## Telegram Commands
 
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a new conversation |
 | `/history [n]` | Show last n messages |
+| `/export` | Export conversation as .txt file |
 | `/model [name]` | Show or switch AI model |
-| `/usage` | Token usage stats |
-| `/remind in <duration> <msg>` | Set a reminder |
+| `/models` | List available models |
+| `/profile list` | List personality profiles |
+| `/profile use <name>` | Switch to a profile |
+| `/tts on/off` | Toggle text-to-speech |
+| `/skills` | List loaded AI tools |
+| `/remind in <time> <msg>` | Set reminder (relative) |
+| `/remind at <HH:MM> <msg>` | Set reminder (absolute) |
 | `/reminders` | List active reminders |
+| `/cancel <id>` | Cancel a reminder |
+| `/usage` | Token usage stats |
 | `/help` | Show all commands |

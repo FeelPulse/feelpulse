@@ -6,7 +6,7 @@ C4 Model: Context → Container → Component → Code
 
 ## Level 1: System Context
 
-> 谁在使用 FeelPulse，它依赖哪些外部系统？
+> Who uses FeelPulse and what external systems does it depend on?
 
 ```plantuml
 @startuml c4-context
@@ -29,18 +29,22 @@ skinparam cloud {
 
 title System Context — FeelPulse
 
-actor "User\n(Leon)" as User #d5e8d4
+actor "User" as User #d5e8d4
 rectangle "FeelPulse\n\nFast Go-based AI assistant\nplatform. Receives messages\nfrom chat channels, routes\nthem to AI models, returns\nresponses." as FP #dae8fc
 
 cloud "Telegram\napi.telegram.org" as TG #fff2cc
 cloud "Anthropic Claude\napi.anthropic.com" as ANT #fff2cc
-cloud "Web Search\n(Brave/DuckDuckGo)" as WEB #fff2cc
+cloud "OpenAI-compatible\nclients" as OAI #fff2cc
+database "SQLite\nsessions.db" as SQL #f8cecc
+file "System TTS\nespeak/say" as TTS #f8cecc
 
 User --> TG : sends chat\nmessages
+User --> OAI : API requests
 TG --> FP : delivers messages\n(long polling)
 FP --> TG : sends AI responses
 FP --> ANT : calls Claude API\n(streaming SSE)
-FP --> WEB : web_search tool\n(HTTP REST)
+FP --> SQL : persists sessions\n& reminders
+FP --> TTS : speaks responses
 
 note right of FP
   Runs on user's machine\nor VPS as a daemon\n(systemd service)
@@ -48,15 +52,16 @@ end note
 @enduml
 ```
 
-**核心关系：**
-- User 通过 Telegram 发消息 → FeelPulse 接收 → 调用 Claude → 回复给 Telegram
-- FeelPulse 运行在用户本地或 VPS，不是云服务
+**Core relationships:**
+- User sends messages via Telegram → FeelPulse receives → calls Claude → replies to Telegram
+- FeelPulse runs on user's local machine or VPS, not as a cloud service
+- Sessions and reminders persist to SQLite database
 
 ---
 
 ## Level 2: Container Diagram
 
-> FeelPulse 内部由哪些可运行的单元组成？
+> What runnable units make up FeelPulse?
 
 ```plantuml
 @startuml c4-container
@@ -71,24 +76,34 @@ actor "User" as User #d5e8d4
 
 package "FeelPulse Process (single Go binary)" {
 
-  rectangle "CLI\n[Go binary]\n\nEntry point.\nParses subcommands:\nstart / init / auth / tui / status" as CLI #dae8fc
+  rectangle "CLI\n[Go binary]\n\nEntry point.\nParses subcommands:\nstart / init / auth / tui\nworkspace / skills / service" as CLI #dae8fc
 
   rectangle "Gateway\n[HTTP Server + Orchestrator]\n\nReceives messages from\nchannels. Orchestrates\nthe full processing\npipeline. Runs on\nlocalhost:18789" as GW #dae8fc
 
   rectangle "TUI\n[Bubbletea Terminal UI]\n\nInteractive terminal\nchat. Talks directly\nto Agent, bypassing\nTelegram." as TUI #dae8fc
 
-  rectangle "Telegram Channel\n[Long Polling]\n\nPolls Telegram Bot API\nevery second. Delivers\nmessages to Gateway.\nSends replies back." as CH #ffe6cc
+  rectangle "Telegram Channel\n[Long Polling]\n\nPolls Telegram Bot API.\nDelivers messages to\nGateway. Sends replies\nand inline keyboards." as CH #ffe6cc
 
-  rectangle "Agent Router\n[AI Client Layer]\n\nManages Anthropic client.\nHandles API key vs\nOAuth (setup-token) auth.\nStreaming SSE support." as AR #ffe6cc
+  rectangle "Agent Router\n[AI Client Layer]\n\nManages Anthropic client.\nHandles API key vs\nOAuth auth. Streaming\nSSE support. Failover." as AR #ffe6cc
 
-  rectangle "Session Store\n[In-Memory Map]\n\nPer-user conversation\nhistory. Keyed by\nchannel:userID.\nAuto-compaction." as SS #d5e8d4
+  rectangle "Session Store\n[In-Memory + SQLite]\n\nPer-user conversation\nhistory. Keyed by\nchannel:userID.\nAuto-compaction." as SS #d5e8d4
 
-  rectangle "Scheduler\n[Background Goroutine]\n\nFires reminders at\nscheduled times.\nTicks every second." as SC #d5e8d4
+  rectangle "Scheduler\n[Background Goroutine]\n\nFires reminders at\nscheduled times.\nPersists to SQLite." as SC #d5e8d4
+
+  rectangle "Heartbeat Service\n[Background Goroutine]\n\nProactive periodic\nmessages. HEARTBEAT.md\ndriven." as HB #d5e8d4
 
   rectangle "Config Watcher\n[Polling Goroutine]\n\nWatches config.yaml\nfor changes every 5s.\nTriggers hot reload." as CW #d5e8d4
+
+  rectangle "Rate Limiter\n[In-Memory]\n\nPer-user message\nrate limiting." as RL #d5e8d4
+
+  rectangle "TTS Speaker\n[External Command]\n\nAuto-detects espeak/\nsay/festival. Sanitizes\ntext for speech." as TTS #d5e8d4
+
+  rectangle "Skills Manager\n[File Loader]\n\nLoads SKILL.md files.\nRegisters as tools.\nExecutes run.sh." as SK #d5e8d4
 }
 
-database "Workspace Files\n~/.feelpulse/workspace/\n\nSOUL.md — persona\nUSER.md — user info\nMEMORY.md — long-term" as WS #f8cecc
+database "SQLite\n~/.feelpulse/sessions.db\n\nConversation history\nReminders" as SQL #f8cecc
+
+database "Workspace Files\n~/.feelpulse/workspace/\n\nSOUL.md — persona\nUSER.md — user info\nMEMORY.md — long-term\nskills/ — AI tools" as WS #f8cecc
 
 file "config.yaml\n~/.feelpulse/\n\nGateway, agent,\nchannel settings" as CFG #f8cecc
 
@@ -102,24 +117,30 @@ GW --> CH : registers handler
 CH --> TG : long-poll updates\n(getUpdates)
 TG --> CH : message events
 CH --> GW : handleMessage()
+GW --> RL : check rate limit
 GW --> SS : load/save history
+SS --> SQL : persist
 GW --> AR : process messages
 AR --> ANT : POST /v1/messages\n(streaming)
 TUI --> AR : direct AI calls
+SC --> SQL : persist reminders
 SC --> CH : send reminder
+HB --> CH : send proactive msg
 CW --> CFG : fs.Stat() every 5s
 CW --> GW : reload config
-WS --> GW : loaded on startup\n+ on config reload
+WS --> GW : loaded on startup
+SK --> WS : loads skills/
+GW --> TTS : speak response
 @enduml
 ```
 
-**单进程架构：** 所有组件在同一个 Go 进程中运行，通过函数调用通信，无 IPC 开销。
+**Single-process architecture:** All components run in one Go process, communicating via function calls with zero IPC overhead.
 
 ---
 
-## Level 3: Component Diagram
+## Level 3: Component Diagram — Gateway
 
-> Gateway 内部各组件如何协作？
+> How do Gateway components work together?
 
 ```plantuml
 @startuml c4-component
@@ -131,44 +152,59 @@ title Component Diagram — Gateway (internal/gateway)
 
 package "Gateway" {
 
-  component "HTTP Mux\n/health\n/hooks/*" as MUXHTTP
+  component "HTTP Mux\n/health\n/dashboard\n/v1/chat/completions\n/hooks/*" as MUXHTTP
   component "Message\nDispatcher\nhandleMessage()" as DISP
-  component "Command\nHandler\n/new /model\n/usage /help" as CMD
-  component "Memory\nManager\nSOUL+USER\n+MEMORY" as MEM
-  component "Session\nManager\nGetOrCreate()\nAddMessage()" as SESS
+  component "Rate\nLimiter\nAllow(uid)" as RL
+  component "Command\nHandler\n/new /model /tts\n/profile /remind" as CMD
+  component "Memory\nManager\nSOUL+USER\n+MEMORY+Profile" as MEM
+  component "Session\nManager\nGetOrCreate()\nAddMessage()\nPersist()" as SESS
   component "Compactor\ncompactIfNeeded()\n80k token limit" as COMP
   component "Usage\nTracker\nTrack() Report()" as USAGE
+  component "TTS\nSpeaker\nSpeak()" as TTS
   component "System Prompt\nBuilder\nAssemblePrompt()" as SPB
 }
 
 component "Telegram Bot\nchannel/telegram.go" as TG_BOT
 component "Agent Router\nagent/router.go" as AR
 component "Scheduler\nscheduler/scheduler.go" as SCHED
-component "Hook Handler\nhook/hook.go" as HOOK
+component "Heartbeat\nheartbeat/heartbeat.go" as HB
+component "Skills Manager\nskills/skills.go" as SKILLS
+component "SQLite Store\nstore/sqlite.go" as STORE
 component "Config Watcher\nwatcher/watcher.go" as WATCHER
 
 TG_BOT --> DISP : inbound message
+DISP --> RL : rate check
+RL --> DISP : allowed/denied
 DISP --> CMD : IsCommand() check
 CMD --> SESS : /new → Clear()
+CMD --> SESS : /tts → SetTTS()
+CMD --> SESS : /profile → SetProfile()
+CMD --> SCHED : /remind → Add()
+CMD --> SCHED : /cancel → Cancel()
 CMD --> USAGE : /usage → Report()
-CMD --> AR : /model → set override
 
 DISP --> SESS : GetOrCreate(key)
+SESS --> STORE : persist
 SESS --> COMP : check token count
 COMP --> AR : summarize old msgs\n(Claude call)
 
 DISP --> MEM : BuildSystemPrompt()
-MEM --> SPB : SOUL.md + base\n+ USER.md + MEMORY.md
+MEM --> SPB : SOUL.md + Profile\n+ USER.md + MEMORY.md
 SPB --> AR : system prompt string
+SKILLS --> AR : register tools
 
 DISP --> AR : Process(messages)
 AR --> TG_BOT : response text
 AR --> USAGE : Track(tokens)
 
+SESS --> TTS : if TTS enabled
+TTS --> TTS : Speak(text)
+
+SCHED --> STORE : persist reminders
 SCHED --> TG_BOT : send reminders
-HOOK --> DISP : webhook messages
+HB --> TG_BOT : proactive messages
 WATCHER --> DISP : reload config
-MUXHTTP --> HOOK : /hooks/* routes
+MUXHTTP --> DISP : /v1/chat/completions
 @enduml
 ```
 
@@ -176,7 +212,7 @@ MUXHTTP --> HOOK : /hooks/* routes
 
 ## Level 3: Component Diagram — Agent Layer
 
-> Agent 如何处理 AI 调用？
+> How does the Agent handle AI calls?
 
 ```plantuml
 @startuml c4-agent
@@ -189,7 +225,7 @@ title Component Diagram — Agent (internal/agent)
 
 component "<<interface>>\nAgent\n+Chat([]Message)\n+Name() string" as IFACE #E8F4FD
 
-component "Router\nagent.go\n\nWraps the active agent.\nHolds per-session\nmodel overrides." as ROUTER
+component "Router\nagent.go\n\nWraps the active agent.\nHolds per-session\nmodel overrides.\nInjects system prompt." as ROUTER
 
 component "AnthropicClient\nanthropic.go\n\nBuilds HTTP requests.\nHandles API key vs\nOAuth auth modes.\nPosts to Claude API.\nParses SSE stream." as ACLIENT
 
@@ -198,6 +234,8 @@ component "FailoverAgent\nfaiover.go\n\nTries primary agent.\nOn error → tries
 component "Summarizer\nsummarizer.go\n\nCalled by Compactor.\nSends old messages\nto Claude with\nsummarize instruction." as SUMM
 
 component "Tool Registry\ntools/tools.go\n\nRegisters built-in tools.\nExec + web_search.\nCalled by agent on\nfunction_call blocks." as TOOLS
+
+component "Skills Manager\nskills/skills.go\n\nLoads SKILL.md files.\nRegisters as tools.\nExecutes run.sh." as SKILLS
 
 cloud "api.anthropic.com\nPOST /v1/messages\n(streaming SSE)" as ANT
 
@@ -209,6 +247,7 @@ ROUTER --> FAILOVER : delegates
 FAILOVER --> ACLIENT : primary
 ACLIENT --> ANT : HTTPS request
 ACLIENT --> TOOLS : execute tool calls
+SKILLS --> TOOLS : register skill tools
 SUMM --> ACLIENT : uses for summarization
 
 note right of ACLIENT
@@ -221,9 +260,9 @@ end note
 
 ---
 
-## Level 3: Component Diagram — Session & Memory
+## Level 3: Component Diagram — Session & Persistence
 
-> 对话历史和记忆系统如何工作？
+> How do conversation history and persistence work?
 
 ```plantuml
 @startuml c4-session-memory
@@ -231,21 +270,26 @@ end note
 skinparam backgroundColor #FFFFFF
 skinparam defaultFontName monospace
 
-title Component Diagram — Session & Memory
+title Component Diagram — Session, Persistence & Memory
 
 component "Session Store\nsession/session.go" as STORE
 component "Store\nmap[key]*Session" as MAP
-component "Session\nMessages []Message\nModel string" as SESS_OBJ
+component "Session\nMessages []Message\nModel string\nTTSEnabled *bool\nProfile string" as SESS_OBJ
 STORE --> MAP
 STORE --> SESS_OBJ
 
 component "Compactor\nsession/compact.go\n\nEstimate tokens: len/4\nIf > threshold:\n  summarize old msgs\n  replace with Summary msg\n  keep last 10 intact" as COMP
+
+component "SQLite Store\nstore/sqlite.go\n\nPersists sessions.\nPersists reminders.\nSurvives restarts." as SQLITE
 
 component "Memory Manager\nmemory/memory.go\n\nLoads on startup.\nReloads on config change.\nBuilds layered prompt." as MEM
 
 rectangle "SOUL.md\nPersona & identity\nReplaces base system\nprompt if present" as SOUL #FFF2CC
 rectangle "USER.md\nUser context:\nname, timezone, prefs\nAppended to prompt" as USER_F #FFF2CC
 rectangle "MEMORY.md\nLong-term memories:\ndecisions, events\nAppended to prompt" as MEM_F #FFF2CC
+rectangle "Profile\n(from config)\nAlternate persona" as PROF #FFF2CC
+
+database "sessions.db\n\nsessions table\nreminders table" as DB #f8cecc
 
 note as WS_NOTE
   <b>~/.feelpulse/workspace/</b>
@@ -256,17 +300,21 @@ WS_NOTE .. MEM_F
 
 MAP "1" --> "*" SESS_OBJ
 SESS_OBJ --> COMP : when len(messages)\nexceeds 80k tokens
+STORE --> SQLITE : persists via
+SQLITE --> DB : reads/writes
 
 MEM --> SOUL : os.ReadFile()
 MEM --> USER_F : os.ReadFile()
 MEM --> MEM_F : os.ReadFile()
+MEM --> PROF : from config profiles
 
 note right of MEM
   System prompt assembly:
   1. SOUL.md (if exists)
-  2. config.agent.system
-  3. "## User Context\n" + USER.md
-  4. "## Memory\n" + MEMORY.md
+  2. Profile content (if active)
+  3. config.agent.system
+  4. "## User Context\n" + USER.md
+  5. "## Memory\n" + MEMORY.md
 end note
 
 note right of COMP
@@ -281,9 +329,58 @@ end note
 
 ---
 
+## Level 3: Component Diagram — Scheduler & TTS
+
+> How do reminders and text-to-speech work?
+
+```plantuml
+@startuml c4-scheduler-tts
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName monospace
+
+title Component Diagram — Scheduler & TTS
+
+component "Scheduler\nscheduler/scheduler.go" as SCHED
+component "Reminders\nmap[id]*Reminder" as REM_MAP
+component "Reminder\nID, Channel, UserID\nMessage, FireAt, Created" as REM_OBJ
+
+component "SQLite Store\nReminderPersister" as PERSIST
+
+component "TTS Speaker\ntts/tts.go" as TTS
+component "Sanitizer\nremove markdown\nemoji, links" as SANI
+
+note as TTS_NOTE
+  Auto-detects:
+  - say (macOS)
+  - espeak-ng
+  - espeak  
+  - festival
+end note
+
+SCHED --> REM_MAP
+REM_MAP --> REM_OBJ
+SCHED --> PERSIST : persist on add/cancel/fire
+TTS --> SANI : sanitize text
+TTS --> TTS_NOTE : uses
+
+note right of SCHED
+  /remind in 30m call mom
+  /remind at 14:30 meeting
+  /cancel abc123
+  
+  Loads reminders on startup.
+  Removes expired.
+  Fires due reminders.
+end note
+@enduml
+```
+
+---
+
 ## Level 4: Code — Message Processing Sequence
 
-> 一条消息从 Telegram 到 Claude 再回到用户的完整代码路径
+> Full code path from Telegram message to Claude and back
 
 ```plantuml
 @startuml c4-sequence
@@ -297,23 +394,29 @@ title Code-Level Sequence — "User sends: hi"
 participant "Telegram API\napi.telegram.org" as TG
 participant "telegram.go\nStartPolling()" as BOT
 participant "gateway.go\nhandleMessage()" as GW
+participant "ratelimit.go\nLimiter" as RL
 participant "command.go\nHandler" as CMD
 participant "session.go\nStore" as SESS
+participant "store/sqlite.go" as DB
 participant "compact.go" as COMP
 participant "memory.go\nManager" as MEM
 participant "anthropic.go\nAnthropicClient" as ANT_CLIENT
 participant "Anthropic API\napi.anthropic.com" as ANT
+participant "tts.go\nSpeaker" as TTS
 participant "usage.go\nTracker" as USAGE
 
 TG -> BOT : {update_id, message: "hi"}
-BOT -> GW : handleMessage(\n  channel="telegram"\n  userID="leagmain"\n  text="hi"\n)
+BOT -> GW : handleMessage(\n  channel="telegram"\n  userID="user123"\n  text="hi"\n)
 activate GW
+
+GW -> RL : Allow("user123")
+RL -> GW : true
 
 GW -> CMD : IsCommand("hi")
 CMD -> GW : false
 
-GW -> SESS : GetOrCreate("telegram:leagmain")
-SESS -> GW : session{messages:[...history...]}
+GW -> SESS : GetOrCreate("telegram:user123")
+SESS -> GW : session{messages:[...history...], TTSEnabled:true}
 
 GW -> COMP : CompactIfNeeded(messages, 80000)
 note right: EstimateTokens() = sum(len(msg.Text)/4)\nif < 80000: no-op\nif >= 80000: summarize + truncate
@@ -338,7 +441,14 @@ deactivate ANT_CLIENT
 
 GW -> SESS : AddMessage(user: "hi")
 GW -> SESS : AddMessage(bot: "Hi there!...")
-GW -> USAGE : Track("telegram:leagmain", 150, 12)
+GW -> DB : Save("telegram:user123", messages, model)
+GW -> USAGE : Track("telegram:user123", 150, 12)
+
+alt TTS enabled for session
+  GW -> TTS : Speak("Hi there! How can I help?")
+  TTS -> TTS : SanitizeText(text)
+  TTS -> TTS : exec("espeak", sanitized)
+end
 
 GW -> BOT : return reply message
 deactivate GW
@@ -352,7 +462,7 @@ TG -> BOT : {ok:true, message_id:123}
 
 ## Level 4: Code — Auth Flow
 
-> 两种认证方式的代码差异
+> Code differences between two authentication methods
 
 ```plantuml
 @startuml c4-auth
@@ -410,15 +520,17 @@ stop
 
 ---
 
-## 系统设计原则
+## System Design Principles
 
-| 原则 | 实现 |
-|------|------|
-| **单进程** | 所有组件在同一 Go 进程，零 IPC 开销 |
-| **无持久化** | Session 在内存，重启清空（设计选择：简单 > 复杂） |
-| **流式响应** | Claude SSE stream → 边生成边处理 |
-| **可热重载** | config.yaml 改变 → watcher 检测 → 自动重载 |
-| **分层 Prompt** | SOUL → base system → USER → MEMORY 依次叠加 |
-| **自动压缩** | 超过 80k token → 旧消息摘要化，保持上下文可控 |
-| **订阅认证** | 伪装 Claude Code headers → 用 Claude 订阅额度，不额外付费 |
-| **3ms 启动** | Go 原生二进制，无 JVM/V8 启动开销 |
+| Principle | Implementation |
+|-----------|----------------|
+| **Single-process** | All components in one Go process, zero IPC overhead |
+| **SQLite persistence** | Sessions and reminders survive restarts |
+| **Streaming responses** | Claude SSE stream → process while generating |
+| **Hot reload** | config.yaml changes → watcher detects → auto-reload |
+| **Layered prompts** | SOUL → Profile → system → USER → MEMORY stacked |
+| **Auto-compaction** | Over 80k tokens → summarize old messages |
+| **Subscription auth** | Mimic Claude Code headers → use subscription quota |
+| **3ms startup** | Native Go binary, no JVM/V8 startup overhead |
+| **Per-session state** | Model, TTS, Profile stored per conversation |
+| **Skills extensibility** | SKILL.md + run.sh = custom AI tools |
