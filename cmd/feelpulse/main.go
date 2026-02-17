@@ -148,8 +148,26 @@ func cmdInit() {
 func cmdStart() {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Error loading config: %v\n", err)
 		fmt.Println("Run 'feelpulse init' to create a config file.")
+		os.Exit(1)
+	}
+
+	// Validate configuration
+	validation := cfg.Validate()
+
+	// Print warnings
+	for _, warn := range validation.Warnings {
+		fmt.Fprintf(os.Stderr, "⚠️  %s\n", warn)
+	}
+
+	// Print errors and exit if invalid
+	if !validation.IsValid() {
+		fmt.Fprintf(os.Stderr, "\n❌ Configuration errors:\n")
+		for _, err := range validation.Errors {
+			fmt.Fprintf(os.Stderr, "   • %s\n", err)
+		}
+		fmt.Fprintf(os.Stderr, "\nRun 'feelpulse auth' to configure authentication.\n")
 		os.Exit(1)
 	}
 

@@ -146,6 +146,85 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// ValidationResult holds the result of config validation
+type ValidationResult struct {
+	Errors   []string
+	Warnings []string
+}
+
+// IsValid returns true if there are no errors
+func (v *ValidationResult) IsValid() bool {
+	return len(v.Errors) == 0
+}
+
+// Validate checks the configuration for required fields and common issues
+func (c *Config) Validate() *ValidationResult {
+	result := &ValidationResult{
+		Errors:   []string{},
+		Warnings: []string{},
+	}
+
+	// Check for required authentication
+	if c.Agent.APIKey == "" && c.Agent.AuthToken == "" {
+		result.Errors = append(result.Errors, "Agent authentication required: set agent.apiKey or agent.authToken")
+	}
+
+	// Check Telegram configuration
+	if c.Channels.Telegram.Enabled {
+		if c.Channels.Telegram.BotToken == "" {
+			result.Errors = append(result.Errors, "Telegram enabled but token not set: set channels.telegram.token")
+		}
+	}
+
+	// Check Discord configuration
+	if c.Channels.Discord.Enabled {
+		if c.Channels.Discord.BotToken == "" {
+			result.Errors = append(result.Errors, "Discord enabled but token not set: set channels.discord.token")
+		}
+	}
+
+	// Check workspace path
+	if c.Workspace.Path != "" {
+		if _, err := os.Stat(c.Workspace.Path); os.IsNotExist(err) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Workspace directory does not exist: %s (run 'feelpulse workspace init')", c.Workspace.Path))
+		}
+	}
+
+	// Check model
+	if c.Agent.Model == "" {
+		result.Warnings = append(result.Warnings, "No model specified, using default (claude-sonnet-4-20250514)")
+	}
+
+	// Check provider
+	if c.Agent.Provider != "" && c.Agent.Provider != "anthropic" && c.Agent.Provider != "openai" {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Unknown provider '%s', supported: anthropic, openai", c.Agent.Provider))
+	}
+
+	// Check browser dependencies
+	if c.Browser.Enabled {
+		result.Warnings = append(result.Warnings, "Browser tools enabled - requires Chrome/Chromium installed")
+	}
+
+	// Check heartbeat interval
+	if c.Heartbeat.Enabled && c.Heartbeat.IntervalMinutes < 1 {
+		result.Warnings = append(result.Warnings, "Heartbeat interval < 1 minute, may cause excessive API calls")
+	}
+
+	// Check rate limit
+	if c.Agent.RateLimit > 100 {
+		result.Warnings = append(result.Warnings, "Rate limit > 100 msg/min - consider lower limit for safety")
+	}
+
+	// Check profile paths
+	for name, path := range c.Workspace.Profiles {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Profile '%s' file not found: %s", name, path))
+		}
+	}
+
+	return result
+}
+
 func Save(cfg *Config) (string, error) {
 	dir := configDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
