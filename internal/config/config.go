@@ -24,6 +24,7 @@ type AgentConfig struct {
 	Model      string `yaml:"model"`
 	Provider   string `yaml:"provider"`
 	APIKey     string `yaml:"apiKey"`
+	AuthToken  string `yaml:"authToken"`  // OAuth setup-token (sk-ant-oat-...) for subscription auth
 	MaxTokens  int    `yaml:"maxTokens"`
 	System     string `yaml:"system"`
 }

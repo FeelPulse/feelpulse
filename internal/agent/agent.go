@@ -26,10 +26,10 @@ func NewRouter(cfg *config.Config) (*Router, error) {
 	// Initialize the configured provider
 	switch cfg.Agent.Provider {
 	case "anthropic", "":
-		if cfg.Agent.APIKey == "" {
-			return nil, fmt.Errorf("anthropic API key not configured")
+		if cfg.Agent.APIKey == "" && cfg.Agent.AuthToken == "" {
+			return nil, fmt.Errorf("anthropic credentials not configured (set apiKey or authToken)")
 		}
-		r.agent = NewAnthropicClient(cfg.Agent.APIKey, cfg.Agent.Model)
+		r.agent = NewAnthropicClient(cfg.Agent.APIKey, cfg.Agent.AuthToken, cfg.Agent.Model)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", cfg.Agent.Provider)
 	}
