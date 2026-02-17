@@ -1,9 +1,11 @@
 package command
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -215,6 +217,99 @@ func TestHandlerUnknownCommand(t *testing.T) {
 
 	if result == nil {
 		t.Fatal("Expected response for unknown command")
+	}
+}
+
+func TestHandlerRemind(t *testing.T) {
+	store := session.NewStore()
+	sched := scheduler.New()
+	defer sched.Stop()
+
+	handler := NewHandler(store, nil)
+	handler.SetScheduler(sched)
+
+	msg := &types.Message{
+		Text:    "/remind in 10m test reminder",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Expected response")
+	}
+
+	// Should confirm the reminder was set
+	if !strings.Contains(result.Text, "Reminder set") {
+		t.Errorf("Expected confirmation, got: %s", result.Text)
+	}
+
+	// Should be in the list
+	reminders := sched.List("telegram", "user123")
+	if len(reminders) != 1 {
+		t.Errorf("Expected 1 reminder, got %d", len(reminders))
+	}
+}
+
+func TestHandlerRemindInvalid(t *testing.T) {
+	store := session.NewStore()
+	sched := scheduler.New()
+	defer sched.Stop()
+
+	handler := NewHandler(store, nil)
+	handler.SetScheduler(sched)
+
+	msg := &types.Message{
+		Text:    "/remind invalid format",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should show error and usage
+	if !strings.Contains(result.Text, "Usage") {
+		t.Errorf("Expected usage help, got: %s", result.Text)
+	}
+}
+
+func TestHandlerReminders(t *testing.T) {
+	store := session.NewStore()
+	sched := scheduler.New()
+	defer sched.Stop()
+
+	handler := NewHandler(store, nil)
+	handler.SetScheduler(sched)
+
+	// Add a reminder directly
+	sched.AddReminder("telegram", "user123", 1*time.Hour, "Test reminder")
+
+	msg := &types.Message{
+		Text:    "/reminders",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	if !strings.Contains(result.Text, "Test reminder") {
+		t.Errorf("Expected reminder in list, got: %s", result.Text)
 	}
 }
 

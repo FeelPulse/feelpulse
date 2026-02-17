@@ -7,14 +7,16 @@ import (
 	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
 // Handler processes slash commands
 type Handler struct {
-	sessions *session.Store
-	cfg      *config.Config
+	sessions  *session.Store
+	scheduler *scheduler.Scheduler
+	cfg       *config.Config
 }
 
 // NewHandler creates a new command handler
@@ -23,6 +25,11 @@ func NewHandler(sessions *session.Store, cfg *config.Config) *Handler {
 		sessions: sessions,
 		cfg:      cfg,
 	}
+}
+
+// SetScheduler sets the scheduler for reminder commands
+func (h *Handler) SetScheduler(s *scheduler.Scheduler) {
+	h.scheduler = s
 }
 
 // IsCommand checks if a message is a slash command
@@ -76,6 +83,10 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleNew(msg.Channel, userID)
 	case "history":
 		response = h.handleHistory(msg.Channel, userID, args)
+	case "remind":
+		response = h.handleRemind(msg.Channel, userID, args)
+	case "reminders":
+		response = h.handleReminders(msg.Channel, userID)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -145,12 +156,60 @@ func (h *Handler) handleHistory(channel, userID, args string) string {
 	return sb.String()
 }
 
+// handleRemind creates a reminder
+func (h *Handler) handleRemind(channel, userID, args string) string {
+	if h.scheduler == nil {
+		return "❌ Reminders are not enabled."
+	}
+
+	durationStr, message, err := scheduler.ParseRemindCommand(args)
+	if err != nil {
+		return fmt.Sprintf("❌ %v\n\nUsage: /remind in <duration> <message>\nExamples:\n  /remind in 10m check email\n  /remind in 1h call mom\n  /remind in 2d submit report", err)
+	}
+
+	duration, err := scheduler.ParseDuration(durationStr)
+	if err != nil {
+		return fmt.Sprintf("❌ Invalid duration: %s", durationStr)
+	}
+
+	id, err := h.scheduler.AddReminder(channel, userID, duration, message)
+	if err != nil {
+		return fmt.Sprintf("❌ Failed to create reminder: %v", err)
+	}
+
+	fireAt := time.Now().Add(duration)
+	return fmt.Sprintf("⏰ Reminder set!\nID: %s\nFires at: %s\nMessage: %s", 
+		id[:8], fireAt.Format(time.RFC822), message)
+}
+
+// handleReminders lists active reminders
+func (h *Handler) handleReminders(channel, userID string) string {
+	if h.scheduler == nil {
+		return "❌ Reminders are not enabled."
+	}
+
+	reminders := h.scheduler.List(channel, userID)
+	if len(reminders) == 0 {
+		return "📭 No active reminders."
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("⏰ *Active Reminders* (%d)\n\n", len(reminders)))
+	for _, r := range reminders {
+		sb.WriteString(r.String())
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse Commands*
 
 /new — Start a new conversation (clear history)
 /history [n] — Show last n messages (default: 10)
+/remind in <time> <message> — Set a reminder
+/reminders — List active reminders
 /help — Show this help message
 
 Just send a message to chat with the AI!`
