@@ -1,4 +1,4 @@
-.PHONY: build install clean test run start stop restart logs status tui fmt vet lint deps dev check help install-service uninstall-service
+.PHONY: build install clean test run start stop restart logs status tui fmt vet lint deps dev check help install-service uninstall-service docker-build docker-run docker-stop docker-push bench test-integration
 
 # Binary name
 BINARY=feelpulse
@@ -136,6 +136,62 @@ dev: fmt vet build start ## Format, vet, build, and start (foreground)
 check: fmt vet test ## Format, vet, and run all tests
 
 release: check build ## Full check + build
+
+## Docker
+
+DOCKER_IMAGE=feelpulse
+DOCKER_TAG=latest
+DOCKER_REGISTRY=
+
+docker-build: ## Build Docker image
+	@echo "🐳 Building Docker image..."
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	@echo "✅ Built: $(DOCKER_IMAGE):$(DOCKER_TAG)"
+
+docker-run: ## Run Docker container
+	@echo "🐳 Starting Docker container..."
+	docker run -d --name feelpulse \
+		-p 18789:18789 \
+		-v ~/.feelpulse:/home/feelpulse/.feelpulse \
+		$(DOCKER_IMAGE):$(DOCKER_TAG)
+	@echo "✅ Container started: feelpulse"
+
+docker-stop: ## Stop Docker container
+	@echo "🛑 Stopping Docker container..."
+	docker stop feelpulse && docker rm feelpulse || true
+	@echo "✅ Container stopped"
+
+docker-push: docker-build ## Build and push Docker image to registry
+	@if [ -z "$(DOCKER_REGISTRY)" ]; then \
+		echo "⚠️  DOCKER_REGISTRY not set. Usage: make docker-push DOCKER_REGISTRY=ghcr.io/username"; \
+		exit 1; \
+	fi
+	@echo "🐳 Pushing to $(DOCKER_REGISTRY)/$(DOCKER_IMAGE):$(DOCKER_TAG)..."
+	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG) $(DOCKER_REGISTRY)/$(DOCKER_IMAGE):$(DOCKER_TAG)
+	docker push $(DOCKER_REGISTRY)/$(DOCKER_IMAGE):$(DOCKER_TAG)
+	@echo "✅ Pushed"
+
+docker-compose-up: ## Start with docker-compose
+	docker-compose up -d
+
+docker-compose-down: ## Stop docker-compose
+	docker-compose down
+
+## Benchmarks
+
+bench: ## Run benchmarks
+	@echo "⚡ Running benchmarks..."
+	$(GOTEST) -bench=. -benchmem ./internal/session/...
+
+bench-all: ## Run all benchmarks with full output
+	@echo "⚡ Running all benchmarks..."
+	$(GOTEST) -bench=. -benchmem -benchtime=3s ./...
+
+## Integration Tests
+
+test-integration: build ## Run integration tests
+	@echo "🧪 Running integration tests..."
+	$(GOTEST) -v -tags=integration ./cmd/feelpulse/...
 
 ## Help
 

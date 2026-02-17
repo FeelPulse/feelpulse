@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  feelpulse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: feelpulse:latest
+    container_name: feelpulse
+    ports:
+      - "18789:18789"
+    volumes:
+      # Mount config and data directory
+      - ~/.feelpulse:/home/feelpulse/.feelpulse
+    environment:
+      - HOME=/home/feelpulse
+      - TZ=UTC
+    restart: unless-stopped
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    # Health check override (uses Dockerfile default if not specified)
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Optional: production setup with external network
+# networks:
+#   default:
+#     name: feelpulse-network
+#     driver: bridge
