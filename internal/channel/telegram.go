@@ -495,13 +495,13 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 		msgID := streamMsgID
 		mu.Unlock()
 
-		// No message sent yet — send the first one when we have content
+		// No message sent yet — send the first one when we have content (plain text, no markdown)
 		if msgID == 0 && currentText != "" {
 			displayText := currentText
 			if len(displayText) > 4000 {
 				displayText = displayText[:4000] + "..."
 			}
-			newID, err := t.SendMessageAndGetID(chatID, displayText, true)
+			newID, err := t.SendMessageAndGetID(chatID, displayText, false)
 			if err != nil {
 				log.Printf("⚠️ Failed to send streaming message: %v", err)
 				return
@@ -523,7 +523,7 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 			if displayText == lastSentText {
 				return
 			}
-			if err := t.EditMessageText(chatID, msgID, displayText, nil); err != nil {
+			if err := t.EditMessageTextMarkdown(chatID, msgID, displayText, nil, false); err != nil {
 				log.Printf("⚠️ Failed to update streaming message: %v", err)
 			} else {
 				mu.Lock()
@@ -573,7 +573,8 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 		if msgID != 0 {
 			if finalDisplay != sent {
 				if err := t.EditMessageText(chatID, msgID, parts[0], nil); err != nil {
-					log.Printf("⚠️ Failed to send final message update: %v", err)
+					// Markdown failed — fallback to plain text
+					_ = t.EditMessageTextMarkdown(chatID, msgID, parts[0], nil, false)
 				}
 			}
 		} else {
@@ -1022,11 +1023,19 @@ func (t *TelegramBot) SendMessageWithKeyboard(chatID int64, text string, keyboar
 
 // EditMessageText edits an existing message
 func (t *TelegramBot) EditMessageText(chatID int64, messageID int64, text string, keyboard *InlineKeyboard) error {
+	return t.EditMessageTextMarkdown(chatID, messageID, text, keyboard, true)
+}
+
+// EditMessageTextMarkdown edits a message with optional markdown parsing.
+func (t *TelegramBot) EditMessageTextMarkdown(chatID int64, messageID int64, text string, keyboard *InlineKeyboard, markdown bool) error {
 	params := map[string]any{
 		"chat_id":    chatID,
 		"message_id": messageID,
 		"text":       text,
-		"parse_mode": "Markdown",
+	}
+
+	if markdown {
+		params["parse_mode"] = "Markdown"
 	}
 
 	if keyboard != nil {
