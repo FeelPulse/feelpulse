@@ -54,6 +54,21 @@ type SubAgentProvider interface {
 	CancelSubAgent(id string) error
 }
 
+// PinInfo holds info about a pinned item
+type PinInfo struct {
+	ID        string
+	Text      string
+	CreatedAt time.Time
+}
+
+// PinProvider interface for /pin commands
+type PinProvider interface {
+	AddPin(sessionKey, text string) (string, error)
+	ListPins(sessionKey string) []PinInfo
+	RemovePin(id string) error
+	GetPins(sessionKey string) string // Returns combined pins text for system prompt
+}
+
 // Handler processes slash commands
 type Handler struct {
 	sessions       *session.Store
@@ -65,6 +80,7 @@ type Handler struct {
 	compactor      ContextCompactor
 	admin          AdminProvider
 	subagents      SubAgentProvider
+	pins           PinProvider
 	activeSession  map[string]string // userKey -> active session key
 }
 
@@ -110,6 +126,11 @@ func (h *Handler) SetAdmin(a AdminProvider) {
 // SetSubAgents sets the sub-agent provider for /agents command
 func (h *Handler) SetSubAgents(s SubAgentProvider) {
 	h.subagents = s
+}
+
+// SetPins sets the pin provider for /pin commands
+func (h *Handler) SetPins(p PinProvider) {
+	h.pins = p
 }
 
 // IsCommand checks if a message is a slash command
@@ -200,6 +221,12 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleAgents()
 	case "agent":
 		response = h.handleAgent(args)
+	case "pin":
+		response = h.handlePin(msg.Channel, userID, args)
+	case "pins":
+		response = h.handlePins(msg.Channel, userID)
+	case "unpin":
+		response = h.handleUnpin(msg.Channel, userID, args)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -883,6 +910,107 @@ func (h *Handler) handleAgent(args string) string {
 	return sb.String()
 }
 
+// handlePin pins text to the current session
+func (h *Handler) handlePin(ch, userID, args string) string {
+	if h.pins == nil {
+		return "❌ Pins are not available."
+	}
+
+	text := strings.TrimSpace(args)
+	if text == "" {
+		return "📌 *Usage:* `/pin <text>`\n\nPins text to your session. Pinned text is always included in the AI's context.\n\n*Examples:*\n  `/pin My name is Alice`\n  `/pin I prefer concise answers`\n  `/pin Always format code in markdown`"
+	}
+
+	sessionKey := session.SessionKey(ch, userID)
+	pinID, err := h.pins.AddPin(sessionKey, text)
+	if err != nil {
+		return fmt.Sprintf("❌ Failed to create pin: %v", err)
+	}
+
+	shortID := pinID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+
+	return fmt.Sprintf("📌 *Pinned!* (ID: `%s`)\n\n\"%s\"\n\n_This info will be included in every AI response._", shortID, text)
+}
+
+// handlePins lists all pinned items for the session
+func (h *Handler) handlePins(ch, userID string) string {
+	if h.pins == nil {
+		return "❌ Pins are not available."
+	}
+
+	sessionKey := session.SessionKey(ch, userID)
+	pins := h.pins.ListPins(sessionKey)
+
+	if len(pins) == 0 {
+		return "📌 No pinned items.\n\nUse `/pin <text>` to pin information to your session."
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📌 *Pinned Items* (%d)\n\n", len(pins)))
+
+	for i, pin := range pins {
+		shortID := pin.ID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		text := pin.Text
+		if len(text) > 50 {
+			text = text[:47] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("%d. `%s` — %s\n", i+1, shortID, text))
+	}
+
+	sb.WriteString("\n_Use `/unpin <id>` to remove a pin._")
+	return sb.String()
+}
+
+// handleUnpin removes a pinned item
+func (h *Handler) handleUnpin(ch, userID, args string) string {
+	if h.pins == nil {
+		return "❌ Pins are not available."
+	}
+
+	pinID := strings.TrimSpace(args)
+	if pinID == "" {
+		return "❌ Usage: `/unpin <id>`\n\nUse `/pins` to see pin IDs."
+	}
+
+	sessionKey := session.SessionKey(ch, userID)
+	pins := h.pins.ListPins(sessionKey)
+
+	// Find matching pin by ID or prefix
+	var foundPin *PinInfo
+	for _, pin := range pins {
+		if pin.ID == pinID || strings.HasPrefix(pin.ID, pinID) {
+			p := pin // capture loop variable
+			foundPin = &p
+			break
+		}
+	}
+
+	if foundPin == nil {
+		return fmt.Sprintf("❌ Pin not found: `%s`\n\nUse `/pins` to see your pinned items.", pinID)
+	}
+
+	if err := h.pins.RemovePin(foundPin.ID); err != nil {
+		return fmt.Sprintf("❌ Failed to remove pin: %v", err)
+	}
+
+	shortID := foundPin.ID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	text := foundPin.Text
+	if len(text) > 30 {
+		text = text[:27] + "..."
+	}
+
+	return fmt.Sprintf("🗑️ Pin removed: `%s` — \"%s\"", shortID, text)
+}
+
 // formatAgentStatus returns emoji-formatted status for sub-agents
 func formatAgentStatus(status string) string {
 	switch status {
@@ -931,6 +1059,11 @@ func (h *Handler) handleHelp() string {
   /fork [name] — Create a conversation fork
   /sessions — List all your sessions
   /switch <name> — Switch to a different session
+
+📌 *Pins*
+  /pin <text> — Pin info to your session
+  /pins — List pinned items
+  /unpin <id> — Remove a pin
 
 🤖 *AI Model*
   /model — Show or switch AI model
