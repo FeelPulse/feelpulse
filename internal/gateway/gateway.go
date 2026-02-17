@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 
 	"github.com/FeelPulse/feelpulse/internal/agent"
@@ -17,6 +19,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/memory"
 	"github.com/FeelPulse/feelpulse/internal/session"
+	"github.com/FeelPulse/feelpulse/internal/watcher"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -30,6 +33,9 @@ type Gateway struct {
 	commands  *command.Handler
 	memory    *memory.Manager
 	compactor *session.Compactor
+	watcher   *watcher.ConfigWatcher
+	cancelCtx context.CancelFunc
+	mu        sync.RWMutex // protects router, telegram, compactor during hot reload
 }
 
 func New(cfg *config.Config) *Gateway {
@@ -65,41 +71,14 @@ func (gw *Gateway) setupRoutes() {
 
 func (gw *Gateway) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	gw.cancelCtx = cancel
 
-	// Initialize agent router if configured
-	if gw.cfg.Agent.APIKey != "" || gw.cfg.Agent.AuthToken != "" {
-		router, err := agent.NewRouter(gw.cfg)
-		if err != nil {
-			log.Printf("⚠️  Agent not configured: %v", err)
-		} else {
-			// Inject workspace files into system prompt
-			router.SetSystemPromptBuilder(gw.memory.BuildSystemPrompt)
-			gw.router = router
-			log.Printf("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
+	// Initialize agent and telegram
+	gw.initializeAgent(ctx)
+	gw.initializeTelegram(ctx)
 
-			// Initialize compactor with summarizer
-			if anthropicClient, ok := router.Agent().(*agent.AnthropicClient); ok {
-				summarizer := agent.NewConversationSummarizer(anthropicClient)
-				maxTokens := gw.cfg.Agent.MaxContextTokens
-				if maxTokens <= 0 {
-					maxTokens = session.DefaultMaxContextTokens
-				}
-				gw.compactor = session.NewCompactor(summarizer, maxTokens, session.DefaultKeepLastN)
-				log.Printf("📦 Context compaction enabled (threshold: %dk tokens)", maxTokens/1000)
-			}
-		}
-	}
-
-	// Initialize Telegram if configured
-	if gw.cfg.Channels.Telegram.Enabled && gw.cfg.Channels.Telegram.BotToken != "" {
-		gw.telegram = channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
-		gw.telegram.SetHandler(gw.handleMessage)
-
-		if err := gw.telegram.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start telegram: %w", err)
-		}
-	}
+	// Start config hot reload watcher
+	gw.startConfigWatcher(ctx)
 
 	// Start HTTP server
 	addr := fmt.Sprintf("%s:%d", gw.cfg.Gateway.Bind, gw.cfg.Gateway.Port)
@@ -115,8 +94,14 @@ func (gw *Gateway) Start() error {
 	go func() {
 		<-quit
 		fmt.Println("\n👋 Shutting down...")
-		if gw.telegram != nil {
-			gw.telegram.Stop()
+		if gw.watcher != nil {
+			gw.watcher.Stop()
+		}
+		gw.mu.RLock()
+		telegram := gw.telegram
+		gw.mu.RUnlock()
+		if telegram != nil {
+			telegram.Stop()
 		}
 		cancel()
 		gw.server.Close()
@@ -126,6 +111,123 @@ func (gw *Gateway) Start() error {
 	return gw.server.ListenAndServe()
 }
 
+// initializeAgent sets up the agent router and compactor
+func (gw *Gateway) initializeAgent(ctx context.Context) {
+	if gw.cfg.Agent.APIKey == "" && gw.cfg.Agent.AuthToken == "" {
+		return
+	}
+
+	router, err := agent.NewRouter(gw.cfg)
+	if err != nil {
+		log.Printf("⚠️  Agent not configured: %v", err)
+		return
+	}
+
+	// Inject workspace files into system prompt
+	router.SetSystemPromptBuilder(gw.memory.BuildSystemPrompt)
+
+	gw.mu.Lock()
+	gw.router = router
+	gw.mu.Unlock()
+
+	log.Printf("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
+
+	// Initialize compactor with summarizer
+	if anthropicClient, ok := router.Agent().(*agent.AnthropicClient); ok {
+		summarizer := agent.NewConversationSummarizer(anthropicClient)
+		maxTokens := gw.cfg.Agent.MaxContextTokens
+		if maxTokens <= 0 {
+			maxTokens = session.DefaultMaxContextTokens
+		}
+		gw.mu.Lock()
+		gw.compactor = session.NewCompactor(summarizer, maxTokens, session.DefaultKeepLastN)
+		gw.mu.Unlock()
+		log.Printf("📦 Context compaction enabled (threshold: %dk tokens)", maxTokens/1000)
+	}
+}
+
+// initializeTelegram sets up the Telegram bot
+func (gw *Gateway) initializeTelegram(ctx context.Context) {
+	if !gw.cfg.Channels.Telegram.Enabled || gw.cfg.Channels.Telegram.BotToken == "" {
+		return
+	}
+
+	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
+	telegram.SetHandler(gw.handleMessage)
+
+	if err := telegram.Start(ctx); err != nil {
+		log.Printf("⚠️  Failed to start telegram: %v", err)
+		return
+	}
+
+	gw.mu.Lock()
+	gw.telegram = telegram
+	gw.mu.Unlock()
+}
+
+// startConfigWatcher starts watching the config file for changes
+func (gw *Gateway) startConfigWatcher(ctx context.Context) {
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, ".feelpulse", "config.yaml")
+
+	gw.watcher = watcher.NewConfigWatcher(configPath, watcher.DefaultPollInterval)
+	gw.watcher.SetCallback(func() {
+		gw.handleConfigReload(ctx)
+	})
+	gw.watcher.Start()
+	log.Printf("👁️  Watching config for changes: %s", configPath)
+}
+
+// handleConfigReload handles config file changes
+func (gw *Gateway) handleConfigReload(ctx context.Context) {
+	newCfg, err := config.Load()
+	if err != nil {
+		log.Printf("⚠️  Failed to reload config: %v", err)
+		return
+	}
+
+	log.Printf("🔄 Config reloaded")
+
+	oldCfg := gw.cfg
+	gw.cfg = newCfg
+
+	// Reload workspace files
+	if err := gw.memory.Load(); err != nil {
+		log.Printf("⚠️  Failed to reload workspace files: %v", err)
+	}
+
+	// Check if agent needs reinitialization
+	agentChanged := oldCfg.Agent.APIKey != newCfg.Agent.APIKey ||
+		oldCfg.Agent.AuthToken != newCfg.Agent.AuthToken ||
+		oldCfg.Agent.Model != newCfg.Agent.Model ||
+		oldCfg.Agent.Provider != newCfg.Agent.Provider
+
+	if agentChanged {
+		log.Printf("🔄 Reinitializing agent...")
+		gw.initializeAgent(ctx)
+	}
+
+	// Check if telegram needs reinitialization
+	telegramChanged := oldCfg.Channels.Telegram.BotToken != newCfg.Channels.Telegram.BotToken ||
+		oldCfg.Channels.Telegram.Enabled != newCfg.Channels.Telegram.Enabled
+
+	if telegramChanged {
+		log.Printf("🔄 Reinitializing Telegram...")
+		gw.mu.Lock()
+		oldTelegram := gw.telegram
+		gw.telegram = nil
+		gw.mu.Unlock()
+
+		if oldTelegram != nil {
+			oldTelegram.Stop()
+		}
+		gw.initializeTelegram(ctx)
+	}
+
+	// Update commands handler with new config
+	gw.commands = command.NewHandler(gw.sessions, newCfg)
+}
+
 // handleMessage processes incoming messages from channels
 func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 	// Check for slash commands first
@@ -133,7 +235,13 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 		return gw.commands.Handle(msg)
 	}
 
-	if gw.router == nil {
+	// Get router with read lock (safe during hot reload)
+	gw.mu.RLock()
+	router := gw.router
+	compactor := gw.compactor
+	gw.mu.RUnlock()
+
+	if router == nil {
 		return &types.Message{
 			Text:    "🔧 AI agent not configured. Set your API key in config.yaml",
 			Channel: msg.Channel,
@@ -152,8 +260,8 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 	history := sess.GetAllMessages()
 
 	// Compact history if needed (summarize old messages)
-	if gw.compactor != nil {
-		compacted, err := gw.compactor.CompactIfNeeded(history)
+	if compactor != nil {
+		compacted, err := compactor.CompactIfNeeded(history)
 		if err != nil {
 			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
 		} else if len(compacted) < len(history) {
@@ -163,7 +271,7 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 	}
 
 	// Route to agent with full history
-	reply, err := gw.router.ProcessWithHistory(history)
+	reply, err := router.ProcessWithHistory(history)
 	if err != nil {
 		log.Printf("❌ Agent error: %v", err)
 		return &types.Message{
@@ -209,12 +317,14 @@ func (gw *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"channels": map[string]bool{},
 	}
 
+	gw.mu.RLock()
 	channels := status["channels"].(map[string]bool)
 	channels["telegram"] = gw.telegram != nil
-	
+
 	if gw.router != nil {
 		status["agent"] = gw.router.Agent().Name()
 	}
+	gw.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
