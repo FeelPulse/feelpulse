@@ -534,3 +534,58 @@ stop
 | **3ms startup** | Native Go binary, no JVM/V8 startup overhead |
 | **Per-session state** | Model, TTS, Profile stored per conversation |
 | **Skills extensibility** | SKILL.md + run.sh = custom AI tools |
+| **Structured logging** | Log levels (DEBUG/INFO/WARN/ERROR), request IDs |
+| **Prometheus metrics** | /metrics endpoint for observability |
+| **Exec sandboxing** | Disabled by default, allowlist-only execution |
+| **Session branching** | /fork + /sessions + /switch for conversations |
+| **Admin commands** | /admin stats/sessions/reload (restricted) |
+
+---
+
+## New Components (Round 4)
+
+### Logger (`internal/logger`)
+
+Structured logging with levels:
+
+```go
+// Log levels: DEBUG, INFO, WARN, ERROR
+// Format: 2026-02-17 16:00:00 INFO [gateway] Processing message from user123
+log := logger.New(&Config{Level: "info", Component: "gateway"})
+log.Info("Processing message from %s", username)
+
+// With request context
+reqLog := log.WithRequestID("user123")
+reqLog.Debug("Session loaded: %d messages", len(messages))
+```
+
+### Metrics (`internal/metrics`)
+
+Prometheus-compatible metrics:
+
+```go
+metrics.IncrementMessages("telegram")
+metrics.AddTokens(inputTokens, outputTokens)
+metrics.SetActiveSessions(sessionStore.Count())
+metrics.IncrementToolCall("web_search")
+```
+
+### Admin Commands
+
+```
+/admin stats     — goroutines, memory, uptime
+/admin sessions  — all active sessions
+/admin reload    — hot-reload config + workspace
+```
+
+Restricted to `admin.username` or first `allowedUsers` entry.
+
+### Session Branching
+
+```
+/fork [name]     — create copy of conversation
+/sessions        — list main + forked sessions
+/switch <name>   — change active session
+```
+
+In-memory fork with full history copy.

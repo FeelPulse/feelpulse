@@ -2,6 +2,8 @@
 
 Fast, lightweight AI assistant platform written in Go. 3ms startup, minimal dependencies.
 
+**Stats:** ~25 packages, ~8000 lines of Go code
+
 ---
 
 ## Overview
@@ -29,12 +31,15 @@ package "FeelPulse" {
   component [Rate Limiter\ninternal/ratelimit] as RL
   component [TTS Speaker\ninternal/tts] as TTS
   component [SQLite Store\ninternal/store] as DB
+  component [Logger\ninternal/logger] as LOG
+  component [Metrics\ninternal/metrics] as MET
 }
 
 cloud "Channels" {
   component [Telegram Bot\ninternal/channel] as TG
   component [Web Dashboard\n/dashboard] as DASH
   component [OpenAI API\n/v1/chat/completions] as OAI
+  component [Metrics API\n/metrics] as PROM
 }
 
 cloud "AI Providers" {
@@ -651,6 +656,32 @@ heartbeat:
 tts:
   enabled: false
   command: ""           # auto-detects: espeak, say, festival
+
+browser:
+  enabled: false        # Requires Chrome/Chromium
+  headless: true
+  timeoutSeconds: 30
+  stealth: true
+
+# Security settings for exec tool
+tools:
+  exec:
+    enabled: false      # Disabled by default for security
+    allowedCommands: [] # e.g. ["echo", "ls", "cat", "git"]
+    timeoutSeconds: 30
+
+# Logging
+log:
+  level: info           # debug, info, warn, error
+
+# Admin commands
+admin:
+  username: ""          # Defaults to first allowedUser
+
+# Metrics endpoint
+metrics:
+  enabled: true
+  path: /metrics
 ```
 
 ---
@@ -668,6 +699,8 @@ feelpulse/
 │   │   ├── anthropic.go     # Anthropic client (API key + OAuth)
 │   │   ├── failover.go      # Automatic model fallback
 │   │   └── summarizer.go    # Conversation compaction helper
+│   ├── browser/
+│   │   └── browser.go       # Browser automation (Chromedp)
 │   ├── channel/
 │   │   ├── telegram.go      # Telegram long-polling bot
 │   │   └── keyboard.go      # Inline keyboards, bot commands
@@ -681,14 +714,18 @@ feelpulse/
 │   │   └── openai.go        # OpenAI-compatible API
 │   ├── heartbeat/
 │   │   └── heartbeat.go     # Proactive check service
+│   ├── logger/
+│   │   └── logger.go        # Structured logging with levels
 │   ├── memory/
 │   │   └── memory.go        # Workspace file loader
+│   ├── metrics/
+│   │   └── metrics.go       # Prometheus-compatible metrics
 │   ├── ratelimit/
 │   │   └── limiter.go       # Per-user rate limiting
 │   ├── scheduler/
 │   │   └── scheduler.go     # Persistent reminders
 │   ├── session/
-│   │   ├── session.go       # Conversation store
+│   │   ├── session.go       # Conversation store + branching
 │   │   └── compact.go       # Context compaction
 │   ├── skills/
 │   │   └── skills.go        # SKILL.md loader + executor
@@ -696,7 +733,7 @@ feelpulse/
 │   │   └── sqlite.go        # SQLite persistence
 │   ├── tools/
 │   │   ├── tools.go         # Tool registry
-│   │   └── builtins.go      # Built-in tools
+│   │   └── builtins.go      # Built-in tools (exec, web_search)
 │   ├── tts/
 │   │   └── tts.go           # Text-to-speech
 │   ├── tui/
@@ -726,6 +763,7 @@ feelpulse/
 | `/dashboard` | GET | Web status dashboard |
 | `/v1/chat/completions` | POST | OpenAI-compatible API |
 | `/hooks/*` | POST | Webhook handlers |
+| `/metrics` | GET | Prometheus-compatible metrics |
 
 ---
 
@@ -736,10 +774,14 @@ feelpulse/
 | `/new` | Start a new conversation |
 | `/history [n]` | Show last n messages |
 | `/export` | Export conversation as .txt file |
+| `/compact` | Manually compress conversation history |
 | `/model [name]` | Show or switch AI model |
 | `/models` | List available models |
 | `/profile list` | List personality profiles |
 | `/profile use <name>` | Switch to a profile |
+| `/fork [name]` | Create conversation fork |
+| `/sessions` | List your sessions |
+| `/switch <name>` | Switch to session |
 | `/tts on/off` | Toggle text-to-speech |
 | `/skills` | List loaded AI tools |
 | `/remind in <time> <msg>` | Set reminder (relative) |
@@ -747,4 +789,69 @@ feelpulse/
 | `/reminders` | List active reminders |
 | `/cancel <id>` | Cancel a reminder |
 | `/usage` | Token usage stats |
+| `/admin stats` | System statistics (admin only) |
+| `/admin sessions` | All sessions (admin only) |
+| `/admin reload` | Reload config (admin only) |
 | `/help` | Show all commands |
+
+---
+
+## Metrics
+
+Prometheus-compatible metrics at `GET /metrics`:
+
+```
+# HELP feelpulse_messages_total Total messages processed
+# TYPE feelpulse_messages_total counter
+feelpulse_messages_total{channel="telegram"} 42
+
+# HELP feelpulse_tokens_total Total tokens used
+feelpulse_tokens_total{type="input"} 12345
+feelpulse_tokens_total{type="output"} 6789
+
+# HELP feelpulse_active_sessions Current active sessions
+feelpulse_active_sessions 3
+
+# HELP feelpulse_tool_calls_total Tool calls by tool name
+feelpulse_tool_calls_total{tool="web_search"} 10
+
+# HELP feelpulse_tool_errors_total Tool errors by tool name
+feelpulse_tool_errors_total{tool="exec"} 1
+```
+
+---
+
+## Security
+
+### Exec Tool Security
+
+The exec tool (shell command execution) is **disabled by default** for security. To enable:
+
+```yaml
+tools:
+  exec:
+    enabled: true
+    allowedCommands:    # Only these commands can run
+      - echo
+      - ls
+      - cat
+      - git
+    timeoutSeconds: 30  # Command timeout
+```
+
+**Blocked patterns** (even if command is in allowlist):
+- `rm -rf /`, `rm -rf ~`, `rm -rf $HOME`
+- `sudo`, `su -`
+- Path traversal (`../`)
+- Piping to shell (`curl ... | sh`)
+- Writing to `/etc/`, `/dev/`
+- System commands (`reboot`, `shutdown`)
+
+### Admin Commands
+
+Admin commands restricted to configured admin user:
+
+```yaml
+admin:
+  username: "alice"    # Defaults to first allowedUser
+```
