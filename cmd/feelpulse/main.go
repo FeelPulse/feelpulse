@@ -32,6 +32,8 @@ func main() {
 		cmdAuth()
 	case "workspace":
 		cmdWorkspace()
+	case "service":
+		cmdService()
 	case "tui":
 		cmdTUI()
 	case "version":
@@ -58,6 +60,7 @@ Commands:
   auth           Configure authentication (API key or setup-token)
   workspace      Manage workspace files (SOUL.md, USER.md, MEMORY.md)
     init         Create workspace directory with template files
+  service        Manage systemd service (install/uninstall/enable/disable/status)
   tui            Start interactive terminal chat interface
   version        Print version
   help           Show this help`)

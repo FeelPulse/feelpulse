@@ -1,4 +1,4 @@
-.PHONY: build install clean test run start stop restart logs status tui fmt vet lint deps dev check help
+.PHONY: build install clean test run start stop restart logs status tui fmt vet lint deps dev check help install-service uninstall-service
 
 # Binary name
 BINARY=feelpulse
@@ -66,6 +66,20 @@ stop: ## Stop background gateway
 	fi
 
 restart: stop start-bg ## Restart background gateway
+
+## systemd service
+
+install-service: build ## Install and enable systemd service (user mode)
+	@echo "📦 Installing systemd service..."
+	$(BUILD_DIR)/$(BINARY) service install
+	$(BUILD_DIR)/$(BINARY) service enable
+	@echo "✅ Service installed and enabled"
+	@echo "💡 Start with: systemctl --user start feelpulse"
+
+uninstall-service: build ## Uninstall systemd service
+	@echo "🗑️  Uninstalling systemd service..."
+	$(BUILD_DIR)/$(BINARY) service uninstall
+	@echo "✅ Service uninstalled"
 
 logs: ## Tail gateway logs
 	@tail -f $(LOG_FILE)
