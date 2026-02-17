@@ -1,5 +1,5 @@
 # Binaries
-feelpulse
+/feelpulse
 *.exe
 *.dll
 *.so
