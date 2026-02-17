@@ -42,6 +42,12 @@ type MetricsConfig struct {
 // ToolsConfig holds tool-specific configuration
 type ToolsConfig struct {
 	Exec ExecToolConfig `yaml:"exec"`
+	File FileToolConfig `yaml:"file"`
+}
+
+// FileToolConfig holds file tool security settings
+type FileToolConfig struct {
+	Enabled bool `yaml:"enabled"` // Enable file tools (default: true — safer than exec)
 }
 
 // ExecToolConfig holds exec tool security settings
@@ -157,6 +163,9 @@ func Default() *Config {
 				Enabled:         false, // Disabled by default for security
 				AllowedCommands: []string{},
 				TimeoutSeconds:  30,
+			},
+			File: FileToolConfig{
+				Enabled: true, // Safer than exec, enabled by default
 			},
 		},
 		Log: LogConfig{

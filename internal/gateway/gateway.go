@@ -118,6 +118,16 @@ func New(cfg *config.Config) *Gateway {
 		log.Info("🔧 Exec tool enabled with %d allowed commands", len(cfg.Tools.Exec.AllowedCommands))
 	}
 
+	// Register file tools (sandboxed to workspace)
+	fileCfg := &tools.FileConfig{
+		Enabled:       cfg.Tools.File.Enabled,
+		WorkspacePath: workspacePath,
+	}
+	tools.RegisterFileTools(toolRegistry, fileCfg)
+	if cfg.Tools.File.Enabled {
+		log.Info("📁 File tools enabled (sandboxed to %s)", workspacePath)
+	}
+
 	gw := &Gateway{
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
