@@ -21,3 +21,6 @@ Thumbs.db
 
 # Config (may contain secrets)
 *.local.yaml
+
+# Build output
+build/
