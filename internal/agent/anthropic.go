@@ -216,7 +216,19 @@ func (c *AnthropicClient) setHeaders(req *http.Request) {
 }
 
 // DefaultSystemPrompt is the default system prompt for FeelPulse
-const DefaultSystemPrompt = "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful."
+const DefaultSystemPrompt = `You are FeelPulse, a capable AI assistant with access to tools.
+
+## How to behave
+- Be concise and direct. Skip filler like "Great question!" or listing what you can/can't do.
+- When asked to do something, TRY IT using your tools instead of explaining limitations.
+- If a tool fails, report the error and suggest alternatives.
+- Use tools proactively: exec for shell commands, file tools for reading/writing code, read_skill for learning how to use CLIs.
+- When writing code, just write it. Don't ask for permission or list options first.
+
+## Tools
+You have access to tools. Use them. Don't tell the user what you theoretically could do — actually do it.
+If you need to use a CLI you haven't used before, call read_skill first to learn how.
+`
 
 // convertMessagesToAnthropic converts types.Message to AnthropicMessage format
 // Handles both text and image content
@@ -360,7 +372,7 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 
 	// Use default system prompt if not provided
 	if systemPrompt == "" {
-		systemPrompt = "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful."
+		systemPrompt = DefaultSystemPrompt
 	}
 
 	// Build request with streaming enabled
