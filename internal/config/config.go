@@ -53,7 +53,7 @@ type FileToolConfig struct {
 // ExecToolConfig holds exec tool security settings
 type ExecToolConfig struct {
 	Enabled         bool     `yaml:"enabled"`         // Enable exec tool (default: false for safety)
-	AllowedCommands []string `yaml:"allowedCommands"` // Allowed command prefixes (e.g., ["ls", "cat", "echo"])
+	AllowedCommands []string `yaml:"allowedCommands"` // Allowed command prefixes. Use ["bash"] for full access (dangerous patterns still blocked)
 	TimeoutSeconds  int      `yaml:"timeoutSeconds"`  // Command timeout (default: 30)
 }
 

@@ -540,7 +540,7 @@ const configPageTemplate = `<!DOCTYPE html>
                 </div>
                 <div class="form-group">
                     <label for="execAllowedCommands">Allowed Commands (comma-separated)</label>
-                    <input type="text" id="execAllowedCommands" name="execAllowedCommands" value="{{.ExecAllowedCommands}}" placeholder="ls, cat, echo, git">
+                    <input type="text" id="execAllowedCommands" name="execAllowedCommands" value="{{.ExecAllowedCommands}}" placeholder="bash">
                     <div class="hint">Leave empty to allow all commands (use with caution)</div>
                 </div>
                 <div class="form-group">
