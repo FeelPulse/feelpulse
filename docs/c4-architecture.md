@@ -11,6 +11,7 @@ C4 Model: Context → Container → Component → Code
 ```plantuml
 @startuml c4-context
 !theme plain
+allowmixing
 skinparam backgroundColor #FFFFFF
 skinparam defaultFontName monospace
 skinparam rectangle {
@@ -60,6 +61,7 @@ end note
 ```plantuml
 @startuml c4-container
 !theme plain
+allowmixing
 skinparam backgroundColor #FFFFFF
 skinparam defaultFontName monospace
 
@@ -127,7 +129,7 @@ skinparam defaultFontName monospace
 
 title Component Diagram — Gateway (internal/gateway)
 
-rectangle "Gateway" {
+package "Gateway" {
 
   component "HTTP Mux\n/health\n/hooks/*" as MUXHTTP
   component "Message\nDispatcher\nhandleMessage()" as DISP
@@ -179,15 +181,13 @@ MUXHTTP --> HOOK : /hooks/* routes
 ```plantuml
 @startuml c4-agent
 !theme plain
+allowmixing
 skinparam backgroundColor #FFFFFF
 skinparam defaultFontName monospace
 
 title Component Diagram — Agent (internal/agent)
 
-interface "Agent\ninterface" as IFACE {
-  +Chat([]Message) AgentResponse
-  +Name() string
-}
+component "<<interface>>\nAgent\n+Chat([]Message)\n+Name() string" as IFACE #E8F4FD
 
 component "Router\nagent.go\n\nWraps the active agent.\nHolds per-session\nmodel overrides." as ROUTER
 
@@ -201,9 +201,9 @@ component "Tool Registry\ntools/tools.go\n\nRegisters built-in tools.\nExec + we
 
 cloud "api.anthropic.com\nPOST /v1/messages\n(streaming SSE)" as ANT
 
-ROUTER ..|> IFACE : implements
-ACLIENT ..|> IFACE : implements
-FAILOVER ..|> IFACE : implements
+ROUTER --> IFACE : implements
+ACLIENT --> IFACE : implements
+FAILOVER --> IFACE : implements
 
 ROUTER --> FAILOVER : delegates
 FAILOVER --> ACLIENT : primary
@@ -233,10 +233,11 @@ skinparam defaultFontName monospace
 
 title Component Diagram — Session & Memory
 
-component "Session Store\nsession/session.go" as STORE {
-  component "Store\nmap[key]*Session" as MAP
-  component "Session\nMessages []Message\nModel string" as SESS_OBJ
-}
+component "Session Store\nsession/session.go" as STORE
+component "Store\nmap[key]*Session" as MAP
+component "Session\nMessages []Message\nModel string" as SESS_OBJ
+STORE --> MAP
+STORE --> SESS_OBJ
 
 component "Compactor\nsession/compact.go\n\nEstimate tokens: len/4\nIf > threshold:\n  summarize old msgs\n  replace with Summary msg\n  keep last 10 intact" as COMP
 
