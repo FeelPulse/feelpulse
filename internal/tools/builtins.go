@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -137,6 +138,16 @@ func execToolSecure(cfg *ExecConfig) *Tool {
 
 			// Create command
 			cmd := exec.CommandContext(execCtx, "sh", "-c", cmdStr)
+
+			// Prevent interactive prompts (git credentials, ssh, sudo passwords, etc.)
+			// Inherit environment but override prompt-related vars
+			cmd.Env = append(os.Environ(),
+				"GIT_TERMINAL_PROMPT=0",   // git: fail instead of prompting for credentials
+				"GIT_ASKPASS=echo",        // git: return empty string for any credential ask
+				"SSH_ASKPASS=echo",        // ssh: return empty string for passphrase
+				"DEBIAN_FRONTEND=noninteractive", // apt: non-interactive mode
+				"SUDO_ASKPASS=echo",       // sudo -A: return empty (note: regular sudo still prompts via tty)
+			)
 
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
