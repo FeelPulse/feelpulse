@@ -160,6 +160,8 @@ func (gw *Gateway) setupRoutes() {
 	gw.mux.HandleFunc("/hooks/", gw.handleHook)
 	gw.mux.HandleFunc("/v1/chat/completions", gw.handleOpenAIChatCompletion)
 	gw.mux.HandleFunc("/dashboard", gw.handleDashboard)
+	gw.mux.HandleFunc("/dashboard/config", gw.handleConfigPage)
+	gw.mux.HandleFunc("/api/config", gw.handleConfigSave)
 
 	// Metrics endpoint
 	if gw.cfg.Metrics.Enabled {

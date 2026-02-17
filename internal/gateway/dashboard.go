@@ -234,6 +234,9 @@ const dashboardTemplate = `<!DOCTYPE html>
                 <h1>FeelPulse Dashboard</h1>
                 <p class="subtitle">v{{.Version}} • AI Assistant Platform</p>
             </div>
+            <div style="margin-left: auto;">
+                <a href="/dashboard/config" style="color: #4ade80; text-decoration: none; font-size: 0.9rem;">⚙️ Config</a>
+            </div>
         </header>
 
         <div class="grid">
