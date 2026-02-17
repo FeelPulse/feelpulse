@@ -61,6 +61,10 @@ func (h *Handler) handleHelp() string {
 
 🛠️ *Skills*
   /skills — List loaded AI tools
+  /skill list — List installed skills
+  /skill install <name> — Install from ClaWHub
+  /skill update <name> — Update a skill
+  /skill search <query> — Search ClaWHub
 
 🤖 *Sub-agents*
   /agents — List spawned sub-agents

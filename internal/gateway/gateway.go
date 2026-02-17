@@ -528,6 +528,12 @@ func (gw *Gateway) wireCommandHandler() {
 		gw.commands.SetSubAgents(gw)
 	}
 
+	// Wire up memory manager for /skill commands
+	if gw.memory != nil {
+		gw.commands.SetMemoryManager(gw.memory)
+		gw.commands.SetSkillReloadCallback(gw.reloadSkills)
+	}
+
 	// Wire up pin manager for /pin commands
 	if gw.db != nil {
 		pm, err := newPinManager(gw.db, gw.log)
@@ -539,6 +545,35 @@ func (gw *Gateway) wireCommandHandler() {
 			gw.log.Info("📌 Pin manager initialized")
 		}
 	}
+}
+
+// reloadSkills hot-reloads skills after install/update
+func (gw *Gateway) reloadSkills() error {
+	// Reload workspace files (including skills)
+	if err := gw.memory.Load(); err != nil {
+		return fmt.Errorf("failed to reload skills: %w", err)
+	}
+
+	// Re-register read_skill tool with updated skill list
+	if skillNames := gw.memory.ListSkillNames(); len(skillNames) > 0 {
+		gw.toolRegistry.Register(&tools.Tool{
+			Name:        "read_skill",
+			Description: "Read the full documentation for a skill. Available skills: " + strings.Join(skillNames, ", "),
+			Parameters: []tools.Parameter{
+				{Name: "name", Type: "string", Description: "Skill name to read", Required: true},
+			},
+			Handler: func(ctx context.Context, params map[string]any) (string, error) {
+				name, _ := params["name"].(string)
+				if name == "" {
+					return "", fmt.Errorf("skill name is required")
+				}
+				return gw.memory.ReadSkill(name)
+			},
+		})
+		gw.log.Info("🔄 Skills reloaded: %s", strings.Join(skillNames, ", "))
+	}
+
+	return nil
 }
 
 // GetBrowser returns the browser instance (for tool execution)

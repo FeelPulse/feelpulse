@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/memory"
 	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/internal/skills"
@@ -73,6 +74,7 @@ type Handler struct {
 	scheduler     *scheduler.Scheduler
 	usage         *usage.Tracker
 	skills        *skills.Manager
+	memory        *memory.Manager
 	cfg           *config.Config
 	browser       BrowserNavigator
 	compactor     ContextCompactor
@@ -104,6 +106,11 @@ func (h *Handler) SetUsageTracker(t *usage.Tracker) {
 // SetSkillsManager sets the skills manager
 func (h *Handler) SetSkillsManager(m *skills.Manager) {
 	h.skills = m
+}
+
+// SetMemoryManager sets the memory manager for workspace access
+func (h *Handler) SetMemoryManager(m *memory.Manager) {
+	h.memory = m
 }
 
 // SetBrowser sets the browser for /browse command
@@ -197,6 +204,8 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response, keyboard = h.handleModels()
 	case "skills":
 		response = h.handleSkills()
+	case "skill":
+		response = h.handleSkill(args)
 	case "tts":
 		response = h.handleTTS(msg.Channel, userID, args)
 	case "profile":

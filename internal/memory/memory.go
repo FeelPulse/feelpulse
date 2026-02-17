@@ -204,9 +204,63 @@ Example:
 	return nil
 }
 
-// extractSkillDescription extracts the first descriptive line from SKILL.md content
+// stripFrontmatter removes YAML frontmatter from content and returns the body.
+// Frontmatter is delimited by --- at the start and end.
+func stripFrontmatter(content string) (body string, frontmatter string) {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return content, ""
+	}
+
+	// Find closing ---
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			// Found end of frontmatter
+			frontmatter = strings.Join(lines[1:i], "\n")
+			body = strings.Join(lines[i+1:], "\n")
+			return strings.TrimLeft(body, "\n"), frontmatter
+		}
+	}
+
+	// No closing ---, return original
+	return content, ""
+}
+
+// extractFrontmatterField extracts a field value from YAML frontmatter.
+// Handles simple key: "value" or key: value patterns.
+func extractFrontmatterField(frontmatter, field string) string {
+	for _, line := range strings.Split(frontmatter, "\n") {
+		trimmed := strings.TrimSpace(line)
+		prefix := field + ":"
+		if strings.HasPrefix(trimmed, prefix) {
+			value := strings.TrimSpace(trimmed[len(prefix):])
+			// Remove surrounding quotes
+			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+				return value[1 : len(value)-1]
+			}
+			if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+				return value[1 : len(value)-1]
+			}
+			return value
+		}
+	}
+	return ""
+}
+
+// extractSkillDescription extracts the description from SKILL.md content.
+// First checks YAML frontmatter for description field, then falls back to first text line.
 func extractSkillDescription(content string) string {
-	for _, line := range strings.Split(content, "\n") {
+	body, frontmatter := stripFrontmatter(content)
+
+	// Try to extract from frontmatter first
+	if frontmatter != "" {
+		if desc := extractFrontmatterField(frontmatter, "description"); desc != "" {
+			return desc
+		}
+	}
+
+	// Fall back to first non-empty, non-heading line from body
+	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -216,14 +270,21 @@ func extractSkillDescription(content string) string {
 	return ""
 }
 
-// ReadSkill reads the full SKILL.md content for a skill by name
+// ReadSkill reads the full SKILL.md content for a skill by name.
+// Frontmatter is stripped before returning.
 func (m *Manager) ReadSkill(name string) (string, error) {
 	skillPath := filepath.Join(m.path, "skills", name, "SKILL.md")
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
 		return "", fmt.Errorf("skill '%s' not found", name)
 	}
-	return string(data), nil
+	body, _ := stripFrontmatter(string(data))
+	return body, nil
+}
+
+// Path returns the workspace path
+func (m *Manager) Path() string {
+	return m.path
 }
 
 // ListSkillNames returns the names of all loaded skills
