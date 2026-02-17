@@ -319,18 +319,17 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	log.Printf("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
 
-	// Send typing indicator
-	if err := t.SendTypingAction(tgMsg.Chat.ID); err != nil {
-		log.Printf("⚠️ Failed to send typing action: %v", err)
-	}
-
 	var reply *types.Message
 	var err error
 
 	// Use streaming handler if available
 	if t.streamingHandler != nil {
+		// Send typing indicator (will be replaced by "Thinking..." message)
+		_ = t.SendTypingAction(tgMsg.Chat.ID)
 		reply, err = t.handleMessageWithStreaming(ctx, tgMsg.Chat.ID, msg)
 	} else {
+		// Send typing indicator
+		_ = t.SendTypingAction(tgMsg.Chat.ID)
 		// Call regular handler
 		reply, err = t.handler(msg)
 	}
@@ -491,6 +490,9 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 	var mu sync.Mutex
 	updateInterval := 500 * time.Millisecond
 
+	// Track what was last sent to Telegram to avoid duplicate edits
+	var lastSentText string
+
 	// Create delta handler that updates the message periodically
 	onDelta := func(delta string) {
 		mu.Lock()
@@ -505,12 +507,26 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 			if len(displayText) > 4000 {
 				displayText = displayText[:4000] + "..."
 			}
+			// Skip if content hasn't changed
+			if displayText == lastSentText {
+				return
+			}
 			if err := t.EditMessageText(chatID, thinkingMsgID, displayText, nil); err != nil {
 				log.Printf("⚠️ Failed to update streaming message: %v", err)
+			} else {
+				lastSentText = displayText
 			}
 			mu.Lock()
 			lastUpdate = time.Now()
 			mu.Unlock()
+		}
+
+		// Send typing indicator periodically to keep it visible
+		mu.Lock()
+		sinceLastUpdate := time.Since(lastUpdate)
+		mu.Unlock()
+		if sinceLastUpdate > 4*time.Second {
+			_ = t.SendTypingAction(chatID)
 		}
 	}
 
@@ -526,18 +542,13 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 	if reply != nil && reply.Text != "" {
 		parts := SplitLongMessage(reply.Text, SafeMessageLength)
 		
-		// First part: edit the thinking message (skip if content unchanged)
-		mu.Lock()
-		lastText := accumulated.String()
-		mu.Unlock()
-		
-		displayPart := parts[0]
-		if len(displayPart) > 4000 {
-			displayPart = displayPart[:4000] + "..."
+		// First part: edit the thinking message (skip if already showing same content)
+		finalDisplay := parts[0]
+		if len(finalDisplay) > 4000 {
+			finalDisplay = finalDisplay[:4000] + "..."
 		}
 		
-		// Only edit if the final text differs from what's already displayed
-		if displayPart != lastText && (len(lastText) <= 4000 || displayPart != lastText[:4000]+"...") {
+		if finalDisplay != lastSentText {
 			if err := t.EditMessageText(chatID, thinkingMsgID, parts[0], nil); err != nil {
 				log.Printf("⚠️ Failed to send final message update: %v", err)
 				_ = t.SendMessage(chatID, parts[0], true)
