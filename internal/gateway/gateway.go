@@ -461,12 +461,22 @@ func (gw *Gateway) initializeSubAgents() {
 	}
 
 	// Create completion callback that injects results and sends notifications
-	onComplete := func(agentID, label, result, parentSessionKey string, err error) {
-		gw.handleSubAgentComplete(agentID, label, result, parentSessionKey, err)
+	onComplete := func(agentID, label, result, parentSessionKey string, duration time.Duration, err error) {
+		gw.handleSubAgentComplete(agentID, label, result, parentSessionKey, duration, err)
 	}
 
 	// Create a new manager with the callback (replace the placeholder one)
 	gw.subagentManager = subagent.NewManager(onComplete)
+
+	// Wire up persistence via adapter
+	if gw.db != nil {
+		adapter := &subAgentPersisterAdapter{db: gw.db}
+		if err := gw.subagentManager.SetPersister(adapter); err != nil {
+			gw.log.Warn("Failed to set up sub-agent persistence: %v", err)
+		} else {
+			gw.log.Info("🤖 Sub-agent persistence enabled (SQLite)")
+		}
+	}
 
 	// Register sub-agent tools if we have a router
 	gw.mu.RLock()
@@ -637,20 +647,23 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 }
 
 // handleSubAgentComplete handles a sub-agent completion
-func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionKey string, err error) {
-	gw.log.Info("🤖 Sub-agent '%s' (%s) completed", label, agentID)
+func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionKey string, duration time.Duration, err error) {
+	gw.log.Info("🤖 Sub-agent '%s' (%s) completed in %s", label, agentID, formatDuration(duration))
+
+	// Format duration for display
+	durationStr := formatDuration(duration)
 
 	// Build result message
 	var message string
 	if err != nil {
-		message = fmt.Sprintf("🤖 Sub-agent **%s** failed:\n\n❌ %v", label, err)
+		message = fmt.Sprintf("🤖 Sub-agent **%s** failed after %s:\n\n❌ %v", label, durationStr, err)
 	} else {
 		// Truncate long results for notification
 		preview := result
 		if len(preview) > 500 {
 			preview = preview[:497] + "..."
 		}
-		message = fmt.Sprintf("🤖 Sub-agent **%s** completed:\n\n%s", label, preview)
+		message = fmt.Sprintf("🤖 Sub-agent **%s** completed in %s:\n\n%s", label, durationStr, preview)
 	}
 
 	// Inject result into parent session
@@ -737,6 +750,80 @@ func parseSessionKey(key string) []string {
 		}
 	}
 	return []string{key}
+}
+
+// subAgentPersisterAdapter wraps SQLiteStore to implement subagent.Persister
+type subAgentPersisterAdapter struct {
+	db *store.SQLiteStore
+}
+
+func (a *subAgentPersisterAdapter) EnsureSubAgentsTable() error {
+	return a.db.EnsureSubAgentsTable()
+}
+
+func (a *subAgentPersisterAdapter) SaveSubAgent(sa *subagent.SubAgentData) error {
+	return a.db.SaveSubAgent(&store.SubAgentData{
+		ID:               sa.ID,
+		Label:            sa.Label,
+		Task:             sa.Task,
+		SystemPrompt:     sa.SystemPrompt,
+		Status:           sa.Status,
+		Result:           sa.Result,
+		Error:            sa.Error,
+		StartedAt:        sa.StartedAt,
+		CompletedAt:      sa.CompletedAt,
+		ParentSessionKey: sa.ParentSessionKey,
+	})
+}
+
+func (a *subAgentPersisterAdapter) DeleteSubAgent(id string) error {
+	return a.db.DeleteSubAgent(id)
+}
+
+func (a *subAgentPersisterAdapter) LoadAllSubAgents() ([]*subagent.SubAgentData, error) {
+	dbAgents, err := a.db.LoadAllSubAgents()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*subagent.SubAgentData, len(dbAgents))
+	for i, sa := range dbAgents {
+		result[i] = &subagent.SubAgentData{
+			ID:               sa.ID,
+			Label:            sa.Label,
+			Task:             sa.Task,
+			SystemPrompt:     sa.SystemPrompt,
+			Status:           sa.Status,
+			Result:           sa.Result,
+			Error:            sa.Error,
+			StartedAt:        sa.StartedAt,
+			CompletedAt:      sa.CompletedAt,
+			ParentSessionKey: sa.ParentSessionKey,
+		}
+	}
+	return result, nil
+}
+
+func (a *subAgentPersisterAdapter) LoadPendingSubAgents() ([]*subagent.SubAgentData, error) {
+	dbAgents, err := a.db.LoadPendingSubAgents()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*subagent.SubAgentData, len(dbAgents))
+	for i, sa := range dbAgents {
+		result[i] = &subagent.SubAgentData{
+			ID:               sa.ID,
+			Label:            sa.Label,
+			Task:             sa.Task,
+			SystemPrompt:     sa.SystemPrompt,
+			Status:           sa.Status,
+			Result:           sa.Result,
+			Error:            sa.Error,
+			StartedAt:        sa.StartedAt,
+			CompletedAt:      sa.CompletedAt,
+			ParentSessionKey: sa.ParentSessionKey,
+		}
+	}
+	return result, nil
 }
 
 // truncateForDisplay truncates a string for display

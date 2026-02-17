@@ -34,14 +34,16 @@ func (m *MockAgentRunner) RunTask(ctx context.Context, task, systemPrompt string
 func TestManagerSpawnAndComplete(t *testing.T) {
 	var completedID, completedLabel, completedResult, completedParent string
 	var completedErr error
+	var completedDuration time.Duration
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	onComplete := func(agentID, label, result, parentKey string, err error) {
+	onComplete := func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completedID = agentID
 		completedLabel = label
 		completedResult = result
 		completedParent = parentKey
+		completedDuration = duration
 		completedErr = err
 		wg.Done()
 	}
@@ -80,6 +82,9 @@ func TestManagerSpawnAndComplete(t *testing.T) {
 	if completedErr != nil {
 		t.Errorf("Expected no error, got %v", completedErr)
 	}
+	if completedDuration <= 0 {
+		t.Errorf("Expected positive duration, got %v", completedDuration)
+	}
 
 	// Verify agent status
 	agent, exists := manager.Get(agentID)
@@ -105,7 +110,7 @@ func TestManagerSpawnWithError(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	onComplete := func(agentID, label, result, parentKey string, err error) {
+	onComplete := func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completedErr = err
 		wg.Done()
 	}
@@ -150,7 +155,7 @@ func TestManagerCancel(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	onComplete := func(agentID, label, result, parentKey string, err error) {
+	onComplete := func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		wg.Done()
 	}
 
@@ -209,7 +214,7 @@ func TestManagerCancelNotFound(t *testing.T) {
 func TestManagerList(t *testing.T) {
 	completed := make(chan struct{}, 3)
 
-	onComplete := func(agentID, label, result, parentKey string, err error) {
+	onComplete := func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completed <- struct{}{}
 	}
 
@@ -252,7 +257,7 @@ func TestManagerList(t *testing.T) {
 func TestManagerCleanup(t *testing.T) {
 	completed := make(chan struct{})
 
-	onComplete := func(agentID, label, result, parentKey string, err error) {
+	onComplete := func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completed <- struct{}{}
 	}
 
@@ -345,7 +350,7 @@ func TestManagerTimeout(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	onComplete := func(agentID, label, result, parentKey string, err error) {
+	onComplete := func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completedErr = err
 		wg.Done()
 	}

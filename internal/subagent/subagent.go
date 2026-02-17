@@ -11,6 +11,29 @@ import (
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
+// SubAgentData represents a sub-agent for storage (interface type to avoid import cycles)
+type SubAgentData struct {
+	ID               string
+	Label            string
+	Task             string
+	SystemPrompt     string
+	Status           string
+	Result           string
+	Error            string
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	ParentSessionKey string
+}
+
+// Persister is the interface for sub-agent persistence
+type Persister interface {
+	SaveSubAgent(sa *SubAgentData) error
+	DeleteSubAgent(id string) error
+	LoadAllSubAgents() ([]*SubAgentData, error)
+	LoadPendingSubAgents() ([]*SubAgentData, error)
+	EnsureSubAgentsTable() error
+}
+
 const (
 	StatusPending  = "pending"
 	StatusRunning  = "running"
@@ -55,7 +78,8 @@ type AgentRunner interface {
 }
 
 // OnCompleteFunc is called when a sub-agent completes
-type OnCompleteFunc func(agentID, label, result, parentSessionKey string, err error)
+// duration is the execution time of the sub-agent
+type OnCompleteFunc func(agentID, label, result, parentSessionKey string, duration time.Duration, err error)
 
 // Manager spawns and tracks sub-agents
 type Manager struct {
@@ -64,6 +88,7 @@ type Manager struct {
 	onComplete    OnCompleteFunc
 	maxRuntime    time.Duration
 	maxIterations int
+	persister     Persister
 }
 
 // NewManager creates a new sub-agent manager
@@ -84,6 +109,75 @@ func (m *Manager) SetMaxRuntime(d time.Duration) {
 // SetMaxIterations sets the maximum number of tool iterations
 func (m *Manager) SetMaxIterations(n int) {
 	m.maxIterations = n
+}
+
+// SetPersister sets the persistence backend and loads existing sub-agents
+func (m *Manager) SetPersister(p Persister) error {
+	if p == nil {
+		return nil
+	}
+
+	// Create table if needed
+	if err := p.EnsureSubAgentsTable(); err != nil {
+		return fmt.Errorf("failed to create sub_agents table: %w", err)
+	}
+
+	m.mu.Lock()
+	m.persister = p
+	m.mu.Unlock()
+
+	// Load all completed sub-agents for history
+	agents, err := p.LoadAllSubAgents()
+	if err != nil {
+		return fmt.Errorf("failed to load sub-agents: %w", err)
+	}
+
+	m.mu.Lock()
+	for _, sa := range agents {
+		m.agents[sa.ID] = &SubAgent{
+			ID:               sa.ID,
+			Label:            sa.Label,
+			Task:             sa.Task,
+			SystemPrompt:     sa.SystemPrompt,
+			Status:           sa.Status,
+			Result:           sa.Result,
+			Error:            sa.Error,
+			StartedAt:        sa.StartedAt,
+			CompletedAt:      sa.CompletedAt,
+			ParentSessionKey: sa.ParentSessionKey,
+		}
+	}
+	m.mu.Unlock()
+
+	return nil
+}
+
+// persist saves a sub-agent to the database
+func (m *Manager) persist(agent *SubAgent) {
+	m.mu.RLock()
+	persister := m.persister
+	m.mu.RUnlock()
+
+	if persister == nil {
+		return
+	}
+
+	agent.mu.RLock()
+	data := &SubAgentData{
+		ID:               agent.ID,
+		Label:            agent.Label,
+		Task:             agent.Task,
+		SystemPrompt:     agent.SystemPrompt,
+		Status:           agent.Status,
+		Result:           agent.Result,
+		Error:            agent.Error,
+		StartedAt:        agent.StartedAt,
+		CompletedAt:      agent.CompletedAt,
+		ParentSessionKey: agent.ParentSessionKey,
+	}
+	agent.mu.RUnlock()
+
+	_ = persister.SaveSubAgent(data)
 }
 
 // generateID creates a unique agent ID
@@ -121,6 +215,9 @@ func (m *Manager) Spawn(
 	m.agents[id] = agent
 	m.mu.Unlock()
 
+	// Persist initial state
+	m.persist(agent)
+
 	// Filter tools: remove spawn_agent to prevent recursive spawning
 	filteredRegistry := filterTools(toolRegistry)
 
@@ -152,7 +249,11 @@ func (m *Manager) runAgent(ctx context.Context, agent *SubAgent, runner AgentRun
 	// Update status to running
 	agent.mu.Lock()
 	agent.Status = StatusRunning
+	startTime := agent.StartedAt
 	agent.mu.Unlock()
+
+	// Persist running status
+	m.persist(agent)
 
 	// Default system prompt if not provided
 	systemPrompt := agent.SystemPrompt
@@ -171,6 +272,7 @@ When done, provide your final answer/result.`, agent.Task)
 	// Update agent state
 	agent.mu.Lock()
 	agent.CompletedAt = time.Now()
+	duration := agent.CompletedAt.Sub(startTime)
 	if ctx.Err() == context.Canceled {
 		agent.Status = StatusCanceled
 		agent.Error = "canceled by user"
@@ -191,13 +293,16 @@ When done, provide your final answer/result.`, agent.Task)
 	finalErr := agent.Error
 	agent.mu.Unlock()
 
-	// Call completion callback
+	// Persist completed state
+	m.persist(agent)
+
+	// Call completion callback with duration
 	if m.onComplete != nil {
 		var callbackErr error
 		if status == StatusFailed || status == StatusCanceled {
 			callbackErr = fmt.Errorf("%s", finalErr)
 		}
-		m.onComplete(agent.ID, label, finalResult, parentKey, callbackErr)
+		m.onComplete(agent.ID, label, finalResult, parentKey, duration, callbackErr)
 	}
 }
 
@@ -307,6 +412,10 @@ func (a *SubAgent) GetStatus() string {
 	if !a.CompletedAt.IsZero() {
 		duration := a.CompletedAt.Sub(a.StartedAt)
 		sb.WriteString(fmt.Sprintf("✅ Completed: %s (took %s)\n", a.CompletedAt.Format(time.Kitchen), formatDuration(duration)))
+	} else if a.Status == StatusRunning {
+		// Show elapsed time for running agents
+		elapsed := time.Since(a.StartedAt)
+		sb.WriteString(fmt.Sprintf("⏳ Running for: %s\n", formatDuration(elapsed)))
 	}
 
 	if a.Status == StatusDone && a.Result != "" {
@@ -318,6 +427,17 @@ func (a *SubAgent) GetStatus() string {
 	}
 
 	return sb.String()
+}
+
+// GetDuration returns the duration of the sub-agent execution
+func (a *SubAgent) GetDuration() time.Duration {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if !a.CompletedAt.IsZero() {
+		return a.CompletedAt.Sub(a.StartedAt)
+	}
+	return time.Since(a.StartedAt)
 }
 
 // formatStatus returns an emoji-formatted status

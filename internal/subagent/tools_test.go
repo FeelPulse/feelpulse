@@ -13,7 +13,7 @@ func TestSpawnAgentTool(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	manager := NewManager(func(agentID, label, result, parentKey string, err error) {
+	manager := NewManager(func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		wg.Done()
 	})
 
@@ -97,7 +97,7 @@ func TestSpawnAgentToolMissingParams(t *testing.T) {
 func TestAgentStatusTool(t *testing.T) {
 	completed := make(chan struct{})
 
-	manager := NewManager(func(agentID, label, result, parentKey string, err error) {
+	manager := NewManager(func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completed <- struct{}{}
 	})
 
@@ -145,7 +145,7 @@ func TestAgentStatusTool(t *testing.T) {
 func TestAgentStatusToolSpecificAgent(t *testing.T) {
 	completed := make(chan string, 1)
 
-	manager := NewManager(func(agentID, label, result, parentKey string, err error) {
+	manager := NewManager(func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		completed <- agentID
 	})
 
@@ -220,7 +220,7 @@ func TestAgentStatusToolNotFound(t *testing.T) {
 func TestCancelAgentTool(t *testing.T) {
 	cancelCalled := make(chan struct{})
 
-	manager := NewManager(func(agentID, label, result, parentKey string, err error) {
+	manager := NewManager(func(agentID, label, result, parentKey string, duration time.Duration, err error) {
 		cancelCalled <- struct{}{}
 	})
 

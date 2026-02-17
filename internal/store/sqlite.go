@@ -235,3 +235,244 @@ func (s *SQLiteStore) CleanExpiredReminders() (int64, error) {
 	}
 	return result.RowsAffected()
 }
+
+// === Sub-Agent Persistence ===
+
+// SubAgentData represents a sub-agent for storage
+type SubAgentData struct {
+	ID               string    `json:"id"`
+	Label            string    `json:"label"`
+	Task             string    `json:"task"`
+	SystemPrompt     string    `json:"system_prompt"`
+	Status           string    `json:"status"`
+	Result           string    `json:"result"`
+	Error            string    `json:"error"`
+	StartedAt        time.Time `json:"started_at"`
+	CompletedAt      time.Time `json:"completed_at"`
+	ParentSessionKey string    `json:"parent_session_key"`
+}
+
+// EnsureSubAgentsTable creates the sub_agents table if it doesn't exist
+func (s *SQLiteStore) EnsureSubAgentsTable() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS sub_agents (
+			id TEXT PRIMARY KEY,
+			label TEXT NOT NULL,
+			task TEXT NOT NULL,
+			system_prompt TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			started_at INTEGER NOT NULL,
+			completed_at INTEGER NOT NULL DEFAULT 0,
+			parent_session_key TEXT NOT NULL
+		)
+	`)
+	return err
+}
+
+// SaveSubAgent persists a sub-agent to the database
+func (s *SQLiteStore) SaveSubAgent(sa *SubAgentData) error {
+	completedAt := int64(0)
+	if !sa.CompletedAt.IsZero() {
+		completedAt = sa.CompletedAt.Unix()
+	}
+
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO sub_agents (id, label, task, system_prompt, status, result, error, started_at, completed_at, parent_session_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, sa.ID, sa.Label, sa.Task, sa.SystemPrompt, sa.Status, sa.Result, sa.Error, sa.StartedAt.Unix(), completedAt, sa.ParentSessionKey)
+	return err
+}
+
+// DeleteSubAgent removes a sub-agent from the database
+func (s *SQLiteStore) DeleteSubAgent(id string) error {
+	_, err := s.db.Exec(`DELETE FROM sub_agents WHERE id = ?`, id)
+	return err
+}
+
+// LoadSubAgent retrieves a sub-agent by ID
+func (s *SQLiteStore) LoadSubAgent(id string) (*SubAgentData, error) {
+	var sa SubAgentData
+	var startedAtUnix, completedAtUnix int64
+
+	err := s.db.QueryRow(`
+		SELECT id, label, task, system_prompt, status, result, error, started_at, completed_at, parent_session_key
+		FROM sub_agents WHERE id = ?
+	`, id).Scan(&sa.ID, &sa.Label, &sa.Task, &sa.SystemPrompt, &sa.Status, &sa.Result, &sa.Error, &startedAtUnix, &completedAtUnix, &sa.ParentSessionKey)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	sa.StartedAt = time.Unix(startedAtUnix, 0)
+	if completedAtUnix > 0 {
+		sa.CompletedAt = time.Unix(completedAtUnix, 0)
+	}
+
+	return &sa, nil
+}
+
+// LoadAllSubAgents retrieves all sub-agents from the database
+func (s *SQLiteStore) LoadAllSubAgents() ([]*SubAgentData, error) {
+	rows, err := s.db.Query(`
+		SELECT id, label, task, system_prompt, status, result, error, started_at, completed_at, parent_session_key
+		FROM sub_agents 
+		ORDER BY started_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var agents []*SubAgentData
+	for rows.Next() {
+		var sa SubAgentData
+		var startedAtUnix, completedAtUnix int64
+		if err := rows.Scan(&sa.ID, &sa.Label, &sa.Task, &sa.SystemPrompt, &sa.Status, &sa.Result, &sa.Error, &startedAtUnix, &completedAtUnix, &sa.ParentSessionKey); err != nil {
+			return nil, err
+		}
+		sa.StartedAt = time.Unix(startedAtUnix, 0)
+		if completedAtUnix > 0 {
+			sa.CompletedAt = time.Unix(completedAtUnix, 0)
+		}
+		agents = append(agents, &sa)
+	}
+	return agents, rows.Err()
+}
+
+// LoadPendingSubAgents retrieves sub-agents that were running when the server stopped
+func (s *SQLiteStore) LoadPendingSubAgents() ([]*SubAgentData, error) {
+	rows, err := s.db.Query(`
+		SELECT id, label, task, system_prompt, status, result, error, started_at, completed_at, parent_session_key
+		FROM sub_agents 
+		WHERE status IN ('pending', 'running')
+		ORDER BY started_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var agents []*SubAgentData
+	for rows.Next() {
+		var sa SubAgentData
+		var startedAtUnix, completedAtUnix int64
+		if err := rows.Scan(&sa.ID, &sa.Label, &sa.Task, &sa.SystemPrompt, &sa.Status, &sa.Result, &sa.Error, &startedAtUnix, &completedAtUnix, &sa.ParentSessionKey); err != nil {
+			return nil, err
+		}
+		sa.StartedAt = time.Unix(startedAtUnix, 0)
+		if completedAtUnix > 0 {
+			sa.CompletedAt = time.Unix(completedAtUnix, 0)
+		}
+		agents = append(agents, &sa)
+	}
+	return agents, rows.Err()
+}
+
+// CleanOldSubAgents removes completed sub-agents older than maxAge
+func (s *SQLiteStore) CleanOldSubAgents(maxAge time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-maxAge).Unix()
+	result, err := s.db.Exec(`
+		DELETE FROM sub_agents 
+		WHERE status IN ('done', 'failed', 'canceled') 
+		AND completed_at > 0 
+		AND completed_at < ?
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// === Pin Persistence ===
+
+// PinData represents a pinned item for storage
+type PinData struct {
+	ID         string    `json:"id"`
+	SessionKey string    `json:"session_key"`
+	Text       string    `json:"text"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// EnsurePinsTable creates the pins table if it doesn't exist
+func (s *SQLiteStore) EnsurePinsTable() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS pins (
+			id TEXT PRIMARY KEY,
+			session_key TEXT NOT NULL,
+			text TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)
+	`)
+	if err != nil {
+		return err
+	}
+	// Index for fast lookup by session
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_pins_session ON pins(session_key)`)
+	return nil
+}
+
+// SavePin persists a pin to the database
+func (s *SQLiteStore) SavePin(p *PinData) error {
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO pins (id, session_key, text, created_at)
+		VALUES (?, ?, ?, ?)
+	`, p.ID, p.SessionKey, p.Text, p.CreatedAt.Unix())
+	return err
+}
+
+// DeletePin removes a pin from the database
+func (s *SQLiteStore) DeletePin(id string) error {
+	_, err := s.db.Exec(`DELETE FROM pins WHERE id = ?`, id)
+	return err
+}
+
+// LoadPinsBySession retrieves all pins for a session
+func (s *SQLiteStore) LoadPinsBySession(sessionKey string) ([]*PinData, error) {
+	rows, err := s.db.Query(`
+		SELECT id, session_key, text, created_at 
+		FROM pins 
+		WHERE session_key = ?
+		ORDER BY created_at ASC
+	`, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pins []*PinData
+	for rows.Next() {
+		var p PinData
+		var createdAtUnix int64
+		if err := rows.Scan(&p.ID, &p.SessionKey, &p.Text, &createdAtUnix); err != nil {
+			return nil, err
+		}
+		p.CreatedAt = time.Unix(createdAtUnix, 0)
+		pins = append(pins, &p)
+	}
+	return pins, rows.Err()
+}
+
+// LoadPin retrieves a single pin by ID
+func (s *SQLiteStore) LoadPin(id string) (*PinData, error) {
+	var p PinData
+	var createdAtUnix int64
+
+	err := s.db.QueryRow(`
+		SELECT id, session_key, text, created_at FROM pins WHERE id = ?
+	`, id).Scan(&p.ID, &p.SessionKey, &p.Text, &createdAtUnix)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	p.CreatedAt = time.Unix(createdAtUnix, 0)
+	return &p, nil
+}
