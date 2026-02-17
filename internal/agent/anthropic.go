@@ -238,6 +238,10 @@ const DefaultSystemPrompt = `You are FeelPulse, a capable AI assistant with acce
 - Always clone git repos INTO the workspace: git clone <url> ~/.feelpulse/workspace/<repo-name>
 - Use file_list and file_read to explore cloned repos, not web_search.
 - Never guess or make up file contents — read the actual files.
+- Don't read files one by one blindly. Use grep to find relevant code fast:
+  bash: grep -r "keyword" ~/.feelpulse/workspace/repo/ --include="*.go" -l
+  bash: grep -n "functionName" ~/.feelpulse/workspace/repo/path/to/file.go
+- If task is unclear, ask for clarification before exploring the whole repo.
 `
 
 // convertMessagesToAnthropic converts types.Message to AnthropicMessage format
