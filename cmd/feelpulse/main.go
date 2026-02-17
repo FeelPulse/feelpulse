@@ -39,8 +39,8 @@ func main() {
 		cmdService()
 	case "tui":
 		cmdTUI()
-	case "version":
-		fmt.Printf("feelpulse v%s\n", version)
+	case "version", "-v", "--version":
+		cmdVersion()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
