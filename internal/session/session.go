@@ -1,6 +1,7 @@
 package session
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -11,6 +12,14 @@ const (
 	// DefaultMaxHistory is the default maximum number of messages to keep per session
 	DefaultMaxHistory = 50
 )
+
+// Persister is the interface for session persistence
+type Persister interface {
+	Save(key string, messages []types.Message, model string) error
+	Load(key string) ([]types.Message, string, error)
+	Delete(key string) error
+	ListKeys() ([]string, error)
+}
 
 // Session represents a conversation session with message history
 type Session struct {
@@ -25,8 +34,9 @@ type Session struct {
 
 // Store manages conversation sessions in memory
 type Store struct {
-	sessions map[string]*Session
-	mu       sync.RWMutex
+	sessions  map[string]*Session
+	persister Persister
+	mu        sync.RWMutex
 }
 
 // NewStore creates a new session store
@@ -34,6 +44,46 @@ func NewStore() *Store {
 	return &Store{
 		sessions: make(map[string]*Session),
 	}
+}
+
+// SetPersister sets the persistence backend and loads existing sessions
+func (s *Store) SetPersister(p Persister) error {
+	s.mu.Lock()
+	s.persister = p
+	s.mu.Unlock()
+
+	// Load all existing sessions from persistence
+	keys, err := p.ListKeys()
+	if err != nil {
+		return err
+	}
+
+	for _, key := range keys {
+		messages, model, err := p.Load(key)
+		if err != nil {
+			log.Printf("⚠️  Failed to load session %s: %v", key, err)
+			continue
+		}
+
+		sess := &Session{
+			Key:        key,
+			Messages:   messages,
+			Model:      model,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+			MaxHistory: DefaultMaxHistory,
+		}
+
+		s.mu.Lock()
+		s.sessions[key] = sess
+		s.mu.Unlock()
+	}
+
+	if len(keys) > 0 {
+		log.Printf("📂 Loaded %d sessions from database", len(keys))
+	}
+
+	return nil
 }
 
 // SessionKey generates a unique key for a channel+user combination
@@ -89,9 +139,16 @@ func (s *Store) Delete(channel, userID string) {
 	key := SessionKey(channel, userID)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	persister := s.persister
 	delete(s.sessions, key)
+	s.mu.Unlock()
+
+	// Delete from persistence
+	if persister != nil {
+		if err := persister.Delete(key); err != nil {
+			log.Printf("⚠️  Failed to delete session from DB: %v", err)
+		}
+	}
 }
 
 // AddMessage adds a message to the session history
@@ -106,6 +163,43 @@ func (sess *Session) AddMessage(msg types.Message) {
 	if sess.MaxHistory > 0 && len(sess.Messages) > sess.MaxHistory {
 		excess := len(sess.Messages) - sess.MaxHistory
 		sess.Messages = sess.Messages[excess:]
+	}
+}
+
+// AddMessageAndPersist adds a message and persists the session
+func (s *Store) AddMessageAndPersist(channel, userID string, msg types.Message) {
+	sess := s.GetOrCreate(channel, userID)
+	sess.AddMessage(msg)
+
+	s.mu.RLock()
+	persister := s.persister
+	s.mu.RUnlock()
+
+	if persister != nil {
+		messages := sess.GetAllMessages()
+		model := sess.GetModel()
+		if err := persister.Save(sess.Key, messages, model); err != nil {
+			log.Printf("⚠️  Failed to persist session: %v", err)
+		}
+	}
+}
+
+// Persist saves the session to the persistence backend
+func (s *Store) Persist(channel, userID string) {
+	s.mu.RLock()
+	persister := s.persister
+	key := SessionKey(channel, userID)
+	sess, exists := s.sessions[key]
+	s.mu.RUnlock()
+
+	if !exists || persister == nil {
+		return
+	}
+
+	messages := sess.GetAllMessages()
+	model := sess.GetModel()
+	if err := persister.Save(key, messages, model); err != nil {
+		log.Printf("⚠️  Failed to persist session: %v", err)
 	}
 }
 
@@ -145,6 +239,27 @@ func (sess *Session) Clear() {
 	sess.Messages = make([]types.Message, 0)
 	sess.Model = ""
 	sess.UpdatedAt = time.Now()
+}
+
+// ClearAndPersist clears the session and removes it from persistence
+func (s *Store) ClearAndPersist(channel, userID string) {
+	key := SessionKey(channel, userID)
+
+	s.mu.RLock()
+	sess, exists := s.sessions[key]
+	persister := s.persister
+	s.mu.RUnlock()
+
+	if exists {
+		sess.Clear()
+	}
+
+	// Delete from persistence (clear = remove from DB)
+	if persister != nil {
+		if err := persister.Delete(key); err != nil {
+			log.Printf("⚠️  Failed to delete session from DB: %v", err)
+		}
+	}
 }
 
 // SetModel sets a per-session model override

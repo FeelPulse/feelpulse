@@ -19,6 +19,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/memory"
 	"github.com/FeelPulse/feelpulse/internal/session"
+	"github.com/FeelPulse/feelpulse/internal/store"
 	"github.com/FeelPulse/feelpulse/internal/watcher"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -30,6 +31,7 @@ type Gateway struct {
 	telegram  *channel.TelegramBot
 	router    *agent.Router
 	sessions  *session.Store
+	db        *store.SQLiteStore
 	commands  *command.Handler
 	memory    *memory.Manager
 	compactor *session.Compactor
@@ -40,6 +42,17 @@ type Gateway struct {
 
 func New(cfg *config.Config) *Gateway {
 	sessions := session.NewStore()
+
+	// Initialize SQLite session persistence
+	dbPath := store.DefaultDBPath()
+	sqliteStore, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		log.Printf("⚠️  Failed to initialize session database: %v", err)
+	} else {
+		if err := sessions.SetPersister(sqliteStore); err != nil {
+			log.Printf("⚠️  Failed to load persisted sessions: %v", err)
+		}
+	}
 
 	// Initialize memory/workspace manager
 	workspacePath := cfg.Workspace.Path
@@ -57,6 +70,7 @@ func New(cfg *config.Config) *Gateway {
 		cfg:      cfg,
 		mux:      http.NewServeMux(),
 		sessions: sessions,
+		db:       sqliteStore,
 		commands: command.NewHandler(sessions, cfg),
 		memory:   memMgr,
 	}
@@ -275,8 +289,8 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 	userID := gw.getUserID(msg)
 	sess := gw.sessions.GetOrCreate(msg.Channel, userID)
 
-	// Add incoming message to session history
-	sess.AddMessage(*msg)
+	// Add incoming message to session history (and persist)
+	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *msg)
 
 	// Get conversation history for agent
 	history := sess.GetAllMessages()
@@ -303,8 +317,8 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 		}, nil
 	}
 
-	// Add bot reply to session history
-	sess.AddMessage(*reply)
+	// Add bot reply to session history (and persist)
+	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *reply)
 
 	return reply, nil
 }
