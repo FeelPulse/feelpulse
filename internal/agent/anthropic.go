@@ -45,6 +45,14 @@ type AnthropicRequest struct {
 	Messages  []AnthropicMessage `json:"messages"`
 	System    string             `json:"system,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
+	Tools     []AnthropicTool    `json:"tools,omitempty"`
+}
+
+// AnthropicTool represents a tool definition for Claude
+type AnthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 // SSEEvent represents a Server-Sent Event from the streaming API
@@ -70,9 +78,21 @@ type SSEMessage struct {
 }
 
 // AnthropicMessage represents a message in the Claude format
+// Content can be a string or an array of content blocks
 type AnthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"` // string or []ContentBlock
+}
+
+// ContentBlock represents a content block in messages (for tool use/results)
+type ContentBlock struct {
+	Type      string          `json:"type"`                  // "text", "tool_use", "tool_result"
+	Text      string          `json:"text,omitempty"`        // for type="text"
+	ID        string          `json:"id,omitempty"`          // for type="tool_use"
+	Name      string          `json:"name,omitempty"`        // for type="tool_use"
+	Input     json.RawMessage `json:"input,omitempty"`       // for type="tool_use"
+	ToolUseID string          `json:"tool_use_id,omitempty"` // for type="tool_result"
+	Content   string          `json:"content,omitempty"`     // for type="tool_result" (result text)
 }
 
 // AnthropicResponse represents the response from Claude API
@@ -89,8 +109,11 @@ type AnthropicResponse struct {
 
 // AnthropicContent represents a content block in the response
 type AnthropicContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`    // for tool_use
+	Name  string          `json:"name,omitempty"`  // for tool_use
+	Input json.RawMessage `json:"input,omitempty"` // for tool_use
 }
 
 // AnthropicUsage represents token usage info
@@ -415,4 +438,205 @@ func parseSSEEvent(data string) (*SSEEvent, error) {
 		return nil, fmt.Errorf("failed to parse SSE event: %w", err)
 	}
 	return &event, nil
+}
+
+// ToolExecutor is a function that executes a tool and returns the result
+type ToolExecutor func(name string, input map[string]any) (string, error)
+
+// ChatWithTools sends messages to Claude with tools and implements the full agentic loop.
+// It will call tools as requested by Claude and continue the conversation until done.
+// maxIterations prevents infinite loops (default 10 if <= 0).
+func (c *AnthropicClient) ChatWithTools(
+	messages []types.Message,
+	systemPrompt string,
+	tools []AnthropicTool,
+	executor ToolExecutor,
+	maxIterations int,
+	callback StreamCallback,
+) (*types.AgentResponse, error) {
+	if maxIterations <= 0 {
+		maxIterations = 10
+	}
+
+	// Convert our messages to Anthropic format
+	anthropicMsgs := make([]AnthropicMessage, 0, len(messages))
+	for _, msg := range messages {
+		role := "user"
+		if msg.IsBot {
+			role = "assistant"
+		}
+		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
+			Role:    role,
+			Content: msg.Text,
+		})
+	}
+
+	// Use default system prompt if not provided
+	if systemPrompt == "" {
+		systemPrompt = DefaultSystemPrompt
+	}
+
+	var totalUsage types.Usage
+	var finalText strings.Builder
+	var model string
+
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		// Build request
+		reqBody := AnthropicRequest{
+			Model:     c.model,
+			MaxTokens: defaultMaxTokens,
+			Messages:  anthropicMsgs,
+			System:    systemPrompt,
+			Tools:     tools,
+		}
+
+		resp, err := c.callAPI(reqBody)
+		if err != nil {
+			return nil, err
+		}
+
+		model = resp.Model
+		totalUsage.InputTokens += resp.Usage.InputTokens
+		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		// Extract text and tool_use blocks from response
+		var textContent strings.Builder
+		var toolUseBlocks []ContentBlock
+
+		for _, block := range resp.Content {
+			switch block.Type {
+			case "text":
+				textContent.WriteString(block.Text)
+				if callback != nil {
+					callback(block.Text)
+				}
+			case "tool_use":
+				toolUseBlocks = append(toolUseBlocks, ContentBlock{
+					Type:  "tool_use",
+					ID:    block.ID,
+					Name:  block.Name,
+					Input: block.Input,
+				})
+			}
+		}
+
+		finalText.WriteString(textContent.String())
+
+		// If stop_reason is not "tool_use", we're done
+		if resp.StopReason != "tool_use" || len(toolUseBlocks) == 0 {
+			log.Printf("📥 [anthropic/agentic] final response (iteration %d): %s", iteration+1, finalText.String())
+			break
+		}
+
+		// Add assistant message with tool_use blocks to conversation
+		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
+			Role:    "assistant",
+			Content: resp.Content, // Include all content blocks
+		})
+
+		// Execute each tool and collect results
+		var toolResults []ContentBlock
+		for _, toolUse := range toolUseBlocks {
+			// Parse input JSON
+			var input map[string]any
+			if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+				input = make(map[string]any)
+			}
+
+			// Execute tool
+			log.Printf("🔧 [tool] %s(%s)", toolUse.Name, truncateJSON(toolUse.Input, 100))
+
+			result, err := executor(toolUse.Name, input)
+			if err != nil {
+				result = fmt.Sprintf("Error: %v", err)
+				log.Printf("🔧 [tool] %s → error: %v", toolUse.Name, err)
+			} else {
+				log.Printf("🔧 [tool] %s → %s", toolUse.Name, truncateString(result, 100))
+			}
+
+			toolResults = append(toolResults, ContentBlock{
+				Type:      "tool_result",
+				ToolUseID: toolUse.ID,
+				Content:   result,
+			})
+		}
+
+		// Add user message with tool results
+		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
+			Role:    "user",
+			Content: toolResults,
+		})
+	}
+
+	return &types.AgentResponse{
+		Text:  finalText.String(),
+		Model: model,
+		Usage: totalUsage,
+	}, nil
+}
+
+// callAPI makes a single API call to Anthropic (non-streaming)
+func (c *AnthropicClient) callAPI(reqBody AnthropicRequest) (*AnthropicResponse, error) {
+	bodyData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", anthropicAPIVersion)
+
+	if c.authMode == AuthModeOAuth {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
+		req.Header.Set("x-app", "cli")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+	} else {
+		req.Header.Set("x-api-key", c.apiKey)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp anthropicErrorWrapper
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("anthropic API error: %s (%s)", errResp.Error.Message, errResp.Error.Type)
+		}
+		return nil, fmt.Errorf("anthropic API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var anthropicResp AnthropicResponse
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &anthropicResp, nil
+}
+
+// truncateString truncates a string to maxLen and adds "..." if truncated
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// truncateJSON truncates JSON to maxLen for logging
+func truncateJSON(data json.RawMessage, maxLen int) string {
+	s := string(data)
+	return truncateString(s, maxLen)
 }

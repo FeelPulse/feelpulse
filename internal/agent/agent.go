@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/tools"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -25,6 +29,7 @@ type Router struct {
 	cfg           *config.Config
 	agent         Agent
 	promptBuilder SystemPromptBuilder
+	toolRegistry  *tools.Registry
 }
 
 // NewRouter creates a new agent router
@@ -79,10 +84,22 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 		systemPrompt = r.promptBuilder(systemPrompt)
 	}
 
-	// Use streaming if callback is provided
-	if callback != nil {
+	// Check if we have tools and an Anthropic client - use agentic loop
+	anthropicClient, isAnthropic := r.agent.(*AnthropicClient)
+	if isAnthropic && r.toolRegistry != nil && len(r.toolRegistry.List()) > 0 {
+		// Build Anthropic tool definitions
+		anthropicTools := r.buildAnthropicTools()
+
+		// Create tool executor
+		executor := r.createToolExecutor()
+
+		// Use agentic loop with tools
+		resp, err = anthropicClient.ChatWithTools(messages, systemPrompt, anthropicTools, executor, 10, callback)
+	} else if callback != nil {
+		// Use streaming without tools
 		resp, err = r.agent.ChatStream(messages, systemPrompt, callback)
 	} else {
+		// Use simple chat
 		resp, err = r.agent.Chat(messages)
 	}
 
@@ -108,6 +125,41 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 	return reply, nil
 }
 
+// buildAnthropicTools converts registry tools to Anthropic format
+func (r *Router) buildAnthropicTools() []AnthropicTool {
+	registryTools := r.toolRegistry.List()
+	anthropicTools := make([]AnthropicTool, 0, len(registryTools))
+
+	for _, tool := range registryTools {
+		schema := tool.ToAnthropicSchema()
+		inputSchema, _ := json.Marshal(schema["input_schema"])
+
+		anthropicTools = append(anthropicTools, AnthropicTool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: inputSchema,
+		})
+	}
+
+	return anthropicTools
+}
+
+// createToolExecutor creates a function that executes tools from the registry
+func (r *Router) createToolExecutor() ToolExecutor {
+	return func(name string, input map[string]any) (string, error) {
+		tool := r.toolRegistry.Get(name)
+		if tool == nil {
+			return "", fmt.Errorf("unknown tool: %s", name)
+		}
+
+		// Execute with a timeout context (60 seconds)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		return tool.Handler(ctx, input)
+	}
+}
+
 // SystemPrompt returns the configured system prompt
 func (r *Router) SystemPrompt() string {
 	return r.cfg.Agent.System
@@ -121,4 +173,14 @@ func (r *Router) SetSystemPromptBuilder(builder SystemPromptBuilder) {
 // Agent returns the current agent
 func (r *Router) Agent() Agent {
 	return r.agent
+}
+
+// SetToolRegistry sets the tool registry for agentic tool calling
+func (r *Router) SetToolRegistry(registry *tools.Registry) {
+	r.toolRegistry = registry
+}
+
+// ToolRegistry returns the current tool registry
+func (r *Router) ToolRegistry() *tools.Registry {
+	return r.toolRegistry
 }

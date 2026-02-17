@@ -137,3 +137,109 @@ func TestStreamingCallbackCalled(t *testing.T) {
 		t.Errorf("Expected 'Hello World!', got %s", full)
 	}
 }
+
+func TestTruncateString(t *testing.T) {
+	tests := []struct {
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"hello", 10, "hello"},
+		{"hello world", 5, "hello..."},
+		{"", 5, ""},
+		{"hi", 2, "hi"},
+		{"hello", 5, "hello"},
+	}
+
+	for _, tt := range tests {
+		got := truncateString(tt.input, tt.maxLen)
+		if got != tt.want {
+			t.Errorf("truncateString(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+		}
+	}
+}
+
+func TestTruncateJSON(t *testing.T) {
+	tests := []struct {
+		input  string
+		maxLen int
+		want   string
+	}{
+		{`{"key":"value"}`, 100, `{"key":"value"}`},
+		{`{"key":"value"}`, 5, `{"key...`},
+	}
+
+	for _, tt := range tests {
+		got := truncateJSON([]byte(tt.input), tt.maxLen)
+		if got != tt.want {
+			t.Errorf("truncateJSON(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+		}
+	}
+}
+
+func TestToolExecutorType(t *testing.T) {
+	// Test that ToolExecutor function signature works correctly
+	var executor ToolExecutor = func(name string, input map[string]any) (string, error) {
+		if name == "test_tool" {
+			query, _ := input["query"].(string)
+			return "Result for: " + query, nil
+		}
+		return "", nil
+	}
+
+	result, err := executor("test_tool", map[string]any{"query": "hello"})
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if result != "Result for: hello" {
+		t.Errorf("Expected 'Result for: hello', got %s", result)
+	}
+}
+
+func TestContentBlockTypes(t *testing.T) {
+	// Test ContentBlock struct
+	textBlock := ContentBlock{
+		Type: "text",
+		Text: "Hello world",
+	}
+	if textBlock.Type != "text" {
+		t.Errorf("Expected type 'text', got %s", textBlock.Type)
+	}
+
+	toolUseBlock := ContentBlock{
+		Type:  "tool_use",
+		ID:    "tool_123",
+		Name:  "web_search",
+		Input: []byte(`{"query":"test"}`),
+	}
+	if toolUseBlock.Type != "tool_use" {
+		t.Errorf("Expected type 'tool_use', got %s", toolUseBlock.Type)
+	}
+
+	toolResultBlock := ContentBlock{
+		Type:      "tool_result",
+		ToolUseID: "tool_123",
+		Content:   "Search results here",
+	}
+	if toolResultBlock.Type != "tool_result" {
+		t.Errorf("Expected type 'tool_result', got %s", toolResultBlock.Type)
+	}
+}
+
+func TestAnthropicToolDefinition(t *testing.T) {
+	tool := AnthropicTool{
+		Name:        "web_search",
+		Description: "Search the web",
+		InputSchema: []byte(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
+	}
+
+	if tool.Name != "web_search" {
+		t.Errorf("Expected name 'web_search', got %s", tool.Name)
+	}
+	if tool.Description != "Search the web" {
+		t.Errorf("Expected description 'Search the web', got %s", tool.Description)
+	}
+	if len(tool.InputSchema) == 0 {
+		t.Error("Expected non-empty InputSchema")
+	}
+}

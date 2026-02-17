@@ -24,30 +24,32 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/internal/store"
+	"github.com/FeelPulse/feelpulse/internal/tools"
 	"github.com/FeelPulse/feelpulse/internal/usage"
 	"github.com/FeelPulse/feelpulse/internal/watcher"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
 type Gateway struct {
-	cfg       *config.Config
-	mux       *http.ServeMux
-	server    *http.Server
-	telegram  *channel.TelegramBot
-	router    *agent.Router
-	sessions  *session.Store
-	db        *store.SQLiteStore
-	commands  *command.Handler
-	memory    *memory.Manager
-	compactor *session.Compactor
-	limiter   *ratelimit.Limiter
-	watcher   *watcher.ConfigWatcher
-	heartbeat *heartbeat.Service
-	usage     *usage.Tracker
-	browser   *browser.Browser
-	startTime time.Time
-	cancelCtx context.CancelFunc
-	mu        sync.RWMutex // protects router, telegram, compactor during hot reload
+	cfg          *config.Config
+	mux          *http.ServeMux
+	server       *http.Server
+	telegram     *channel.TelegramBot
+	router       *agent.Router
+	sessions     *session.Store
+	db           *store.SQLiteStore
+	commands     *command.Handler
+	memory       *memory.Manager
+	compactor    *session.Compactor
+	limiter      *ratelimit.Limiter
+	watcher      *watcher.ConfigWatcher
+	heartbeat    *heartbeat.Service
+	usage        *usage.Tracker
+	browser      *browser.Browser
+	toolRegistry *tools.Registry
+	startTime    time.Time
+	cancelCtx    context.CancelFunc
+	mu           sync.RWMutex // protects router, telegram, compactor during hot reload
 }
 
 func New(cfg *config.Config) *Gateway {
@@ -85,16 +87,21 @@ func New(cfg *config.Config) *Gateway {
 	// Initialize usage tracker
 	usageTracker := usage.NewTracker()
 
+	// Initialize tool registry with built-in tools
+	toolRegistry := tools.NewRegistry()
+	tools.RegisterBuiltins(toolRegistry)
+
 	gw := &Gateway{
-		cfg:       cfg,
-		mux:       http.NewServeMux(),
-		sessions:  sessions,
-		db:        sqliteStore,
-		commands:  command.NewHandler(sessions, cfg),
-		memory:    memMgr,
-		limiter:   limiter,
-		usage:     usageTracker,
-		startTime: time.Now(),
+		cfg:          cfg,
+		mux:          http.NewServeMux(),
+		sessions:     sessions,
+		db:           sqliteStore,
+		commands:     command.NewHandler(sessions, cfg),
+		memory:       memMgr,
+		limiter:      limiter,
+		usage:        usageTracker,
+		toolRegistry: toolRegistry,
+		startTime:    time.Now(),
 	}
 	gw.commands.SetUsageTracker(usageTracker)
 	gw.setupRoutes()
@@ -176,6 +183,15 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 
 	// Inject workspace files into system prompt
 	router.SetSystemPromptBuilder(gw.memory.BuildSystemPrompt)
+
+	// Wire up tool registry for agentic tool calling
+	if gw.toolRegistry != nil {
+		router.SetToolRegistry(gw.toolRegistry)
+		toolCount := len(gw.toolRegistry.List())
+		if toolCount > 0 {
+			log.Printf("🔧 Tool registry attached with %d tools", toolCount)
+		}
+	}
 
 	gw.mu.Lock()
 	gw.router = router
