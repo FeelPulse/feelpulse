@@ -32,17 +32,17 @@ func DefaultExecConfig() *ExecConfig {
 
 // dangerousPatterns are blocked regardless of allowlist
 var dangerousPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\brm\s+(-rf|-fr|--recursive)?\s*(\/|~|\$HOME|\$PWD|\*)`), // rm -rf dangerous paths
-	regexp.MustCompile(`(?i)\bsudo\b`),                                                // sudo
-	regexp.MustCompile(`(?i)\bsu\s+-`),                                                // su -
-	regexp.MustCompile(`\.\./`),                                                       // path traversal
-	regexp.MustCompile(`(?i)\b(curl|wget)\b.*\|\s*(ba)?sh`),                           // curl | sh
-	regexp.MustCompile(`(?i)\bchmod\s+(777|[+]?[aou][+][rwx]s)`),                       // chmod dangerous perms
-	regexp.MustCompile(`(?i)\bdd\s+.*of=/dev/`),                                        // dd to device
-	regexp.MustCompile(`(?i)\bmkfs\b`),                                                 // filesystem format
-	regexp.MustCompile(`(?i)\b(reboot|shutdown|halt|poweroff)\b`),                      // system control
-	regexp.MustCompile(`(?i)>[>&]?\s*/etc/`),                                           // writing to /etc
-	regexp.MustCompile(`(?i)>[>&]?\s*/dev/`),                                           // writing to /dev
+	regexp.MustCompile(`(?i)\brm\s+(-rf|-fr|--recursive)?\s*(\/|~|\$HOME|\$PWD|\*)`),          // rm -rf dangerous paths
+	regexp.MustCompile(`(?i)\bsudo\s+(rm|chmod|chown|mkfs|dd|reboot|shutdown|halt|poweroff)\b`), // dangerous sudo commands
+	regexp.MustCompile(`(?i)\bsu\s+-`),                                                          // su -
+	regexp.MustCompile(`\.\./`),                                                                 // path traversal
+	regexp.MustCompile(`(?i)\b(curl|wget)\b.*\|\s*(ba)?sh`),                                    // curl | sh
+	regexp.MustCompile(`(?i)\bchmod\s+(777|[+]?[aou][+][rwx]s)`),                              // chmod dangerous perms
+	regexp.MustCompile(`(?i)\bdd\s+.*of=/dev/`),                                                // dd to device
+	regexp.MustCompile(`(?i)\bmkfs\b`),                                                         // filesystem format
+	regexp.MustCompile(`(?i)\b(reboot|shutdown|halt|poweroff)\b`),                              // system control
+	regexp.MustCompile(`(?i)>[>&]?\s*/etc/`),                                                   // writing to /etc
+	regexp.MustCompile(`(?i)>[>&]?\s*/dev/`),                                                   // writing to /dev
 }
 
 // RegisterBuiltins registers all built-in tools

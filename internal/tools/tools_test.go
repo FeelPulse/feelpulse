@@ -216,7 +216,9 @@ func TestExecToolDangerousPatterns(t *testing.T) {
 		"rm -rf /",
 		"rm -rf ~",
 		"rm -rf $HOME",
-		"sudo anything",
+		"sudo rm -rf /",
+		"sudo chmod 777 /etc/passwd",
+		"sudo shutdown now",
 		"chmod 777 /etc/passwd",
 		"dd if=/dev/zero of=/dev/sda",
 	}
@@ -295,7 +297,7 @@ func TestValidateExecCommand(t *testing.T) {
 		{"git log --oneline", false},
 		{"rm file.txt", true},       // Not in allowlist
 		{"whoami", true},            // Not in allowlist
-		{"sudo ls", true},           // Contains sudo
+		{"sudo ls", true},           // sudo not in allowlist
 		{"cat ../../../etc/passwd", true}, // Path traversal
 	}
 
