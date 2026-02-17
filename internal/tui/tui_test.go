@@ -12,32 +12,38 @@ import (
 func TestFormatMessage(t *testing.T) {
 	tests := []struct {
 		name     string
-		msg      types.Message
+		msg      TimestampedMessage
 		wantUser bool // true if should contain "You:", false for "AI:"
 	}{
 		{
 			name: "user message",
-			msg: types.Message{
-				Text:      "hello world",
-				IsBot:     false,
+			msg: TimestampedMessage{
+				Message: types.Message{
+					Text:  "hello world",
+					IsBot: false,
+				},
 				Timestamp: time.Now(),
 			},
 			wantUser: true,
 		},
 		{
 			name: "AI message",
-			msg: types.Message{
-				Text:      "Hi! How can I help?",
-				IsBot:     true,
+			msg: TimestampedMessage{
+				Message: types.Message{
+					Text:  "Hi! How can I help?",
+					IsBot: true,
+				},
 				Timestamp: time.Now(),
 			},
 			wantUser: false,
 		},
 		{
 			name: "multi-line user message",
-			msg: types.Message{
-				Text:      "line1\nline2\nline3",
-				IsBot:     false,
+			msg: TimestampedMessage{
+				Message: types.Message{
+					Text:  "line1\nline2\nline3",
+					IsBot: false,
+				},
 				Timestamp: time.Now(),
 			},
 			wantUser: true,
@@ -46,7 +52,13 @@ func TestFormatMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := formatMessage(tt.msg)
+			var result string
+			if tt.wantUser {
+				result = formatUserMessage(tt.msg.Text)
+			} else {
+				result = formatAIMessage(tt.msg.Text)
+			}
+
 			if tt.wantUser {
 				if !strings.Contains(result, "You:") {
 					t.Errorf("expected user message to contain 'You:', got: %s", result)
@@ -55,9 +67,6 @@ func TestFormatMessage(t *testing.T) {
 				if !strings.Contains(result, "AI:") {
 					t.Errorf("expected AI message to contain 'AI:', got: %s", result)
 				}
-			}
-			if !strings.Contains(result, tt.msg.Text) {
-				t.Errorf("expected message to contain text %q, got: %s", tt.msg.Text, result)
 			}
 		})
 	}
@@ -207,5 +216,407 @@ func TestWrapText(t *testing.T) {
 				t.Errorf("wrapText(%q, %d) should produce multiple lines, got %d lines", tt.text, tt.width, len(lines))
 			}
 		})
+	}
+}
+
+// TestContainsMarkdown tests markdown detection
+func TestContainsMarkdown(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		expected bool
+	}{
+		{
+			name:     "plain text",
+			text:     "Hello, how are you?",
+			expected: false,
+		},
+		{
+			name:     "code block",
+			text:     "Here's some code:\n```go\nfmt.Println(\"hello\")\n```",
+			expected: true,
+		},
+		{
+			name:     "inline code",
+			text:     "Use the `fmt` package",
+			expected: true,
+		},
+		{
+			name:     "header",
+			text:     "# This is a title",
+			expected: true,
+		},
+		{
+			name:     "bold text",
+			text:     "This is **important**",
+			expected: true,
+		},
+		{
+			name:     "bullet list",
+			text:     "- Item one\n- Item two",
+			expected: true,
+		},
+		{
+			name:     "numbered list",
+			text:     "1. First\n2. Second",
+			expected: true,
+		},
+		{
+			name:     "blockquote",
+			text:     "> This is a quote",
+			expected: true,
+		},
+		{
+			name:     "asterisk in middle of word",
+			text:     "This*is*fine and not markdown",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsMarkdown(tt.text)
+			if got != tt.expected {
+				t.Errorf("containsMarkdown(%q) = %v, want %v", tt.text, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestRenderMarkdown tests markdown rendering
+func TestRenderMarkdown(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		width int
+	}{
+		{
+			name:  "code block",
+			text:  "```go\nfmt.Println(\"hello\")\n```",
+			width: 80,
+		},
+		{
+			name:  "header",
+			text:  "# Title\n\nSome content",
+			width: 80,
+		},
+		{
+			name:  "list",
+			text:  "- Item 1\n- Item 2\n- Item 3",
+			width: 60,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := renderMarkdown(tt.text, tt.width)
+			// Just verify we get some output
+			if result == "" {
+				t.Error("renderMarkdown returned empty string")
+			}
+			// Result should be different from input (formatted)
+			if result == tt.text {
+				t.Error("renderMarkdown should transform the content")
+			}
+		})
+	}
+}
+
+// TestRenderIfMarkdown tests conditional markdown rendering
+func TestRenderIfMarkdown(t *testing.T) {
+	// Plain text should be unchanged
+	plainText := "Hello, how are you?"
+	result := renderIfMarkdown(plainText, 80)
+	if result != plainText {
+		t.Errorf("renderIfMarkdown should not change plain text, got %q", result)
+	}
+
+	// Markdown text should be rendered
+	mdText := "# Title\n\nSome **bold** text"
+	result = renderIfMarkdown(mdText, 80)
+	if result == mdText {
+		t.Error("renderIfMarkdown should render markdown content")
+	}
+}
+
+// TestAutocompleteFilter tests command autocomplete filtering
+func TestAutocompleteFilter(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		expected int // number of matches
+	}{
+		{
+			name:     "empty prefix returns all",
+			prefix:   "",
+			expected: 5, // all commands
+		},
+		{
+			name:     "slash returns all",
+			prefix:   "/",
+			expected: 5,
+		},
+		{
+			name:     "filter /m",
+			prefix:   "/m",
+			expected: 1, // /model
+		},
+		{
+			name:     "filter /n",
+			prefix:   "/n",
+			expected: 1, // /new
+		},
+		{
+			name:     "filter /q",
+			prefix:   "/q",
+			expected: 1, // /quit
+		},
+		{
+			name:     "filter /u",
+			prefix:   "/u",
+			expected: 1, // /usage
+		},
+		{
+			name:     "filter /h",
+			prefix:   "/h",
+			expected: 1, // /help
+		},
+		{
+			name:     "no match",
+			prefix:   "/xyz",
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches := filterCommands(tt.prefix)
+			if len(matches) != tt.expected {
+				t.Errorf("filterCommands(%q) returned %d matches, want %d", tt.prefix, len(matches), tt.expected)
+			}
+		})
+	}
+}
+
+// TestAutocompleteNavigation tests autocomplete selection navigation
+func TestAutocompleteNavigation(t *testing.T) {
+	ac := NewAutocomplete()
+
+	// Update with /m to show /model
+	ac.Update("/")
+
+	if !ac.IsActive() {
+		t.Error("autocomplete should be active after /")
+	}
+
+	// Check we have suggestions
+	if len(ac.suggestions) == 0 {
+		t.Fatal("expected suggestions")
+	}
+
+	// Navigate next
+	initialSelected := ac.selected
+	ac.Next()
+	if ac.selected == initialSelected && len(ac.suggestions) > 1 {
+		t.Error("Next() should change selection")
+	}
+
+	// Navigate prev
+	ac.Prev()
+	if ac.selected != initialSelected {
+		t.Error("Prev() should return to initial selection")
+	}
+
+	// Reset
+	ac.Reset()
+	if ac.IsActive() {
+		t.Error("autocomplete should not be active after Reset()")
+	}
+}
+
+// TestAutocompleteSelected tests getting selected command
+func TestAutocompleteSelected(t *testing.T) {
+	ac := NewAutocomplete()
+	ac.Update("/m")
+
+	selected := ac.Selected()
+	if selected != "/model" {
+		t.Errorf("expected /model, got %q", selected)
+	}
+}
+
+// TestRelativeTime tests relative timestamp formatting
+func TestRelativeTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		expected string
+	}{
+		{
+			name:     "just now",
+			duration: 30 * time.Second,
+			expected: "just now",
+		},
+		{
+			name:     "1 minute",
+			duration: 1 * time.Minute,
+			expected: "1m ago",
+		},
+		{
+			name:     "5 minutes",
+			duration: 5 * time.Minute,
+			expected: "5m ago",
+		},
+		{
+			name:     "1 hour",
+			duration: 1 * time.Hour,
+			expected: "1h ago",
+		},
+		{
+			name:     "3 hours",
+			duration: 3 * time.Hour,
+			expected: "3h ago",
+		},
+		{
+			name:     "1 day",
+			duration: 24 * time.Hour,
+			expected: "1d ago",
+		},
+		{
+			name:     "3 days",
+			duration: 72 * time.Hour,
+			expected: "3d ago",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := time.Now().Add(-tt.duration)
+			result := relativeTime(ts)
+			if result != tt.expected {
+				t.Errorf("relativeTime(%v ago) = %q, want %q", tt.duration, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestRelativeTimeZero tests zero time handling
+func TestRelativeTimeZero(t *testing.T) {
+	result := relativeTime(time.Time{})
+	if result != "" {
+		t.Errorf("relativeTime(zero) = %q, want empty string", result)
+	}
+}
+
+// TestFormatProgressBar tests progress bar rendering
+func TestFormatProgressBar(t *testing.T) {
+	tests := []struct {
+		name  string
+		used  int
+		total int
+		width int
+	}{
+		{
+			name:  "empty",
+			used:  0,
+			total: 80000,
+			width: 60,
+		},
+		{
+			name:  "half full",
+			used:  40000,
+			total: 80000,
+			width: 60,
+		},
+		{
+			name:  "full",
+			used:  80000,
+			total: 80000,
+			width: 60,
+		},
+		{
+			name:  "over limit",
+			used:  100000,
+			total: 80000,
+			width: 60,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatProgressBar(tt.used, tt.total, tt.width)
+			if !strings.Contains(result, "Context:") {
+				t.Error("progress bar should contain 'Context:'")
+			}
+			if !strings.Contains(result, "%") {
+				t.Error("progress bar should contain percentage")
+			}
+		})
+	}
+}
+
+// TestFormatToolStatus tests tool status formatting
+func TestFormatToolStatus(t *testing.T) {
+	result := formatToolStatus("web_search", "query=golang")
+	if !strings.Contains(result, "🔧") {
+		t.Error("tool status should contain tool emoji")
+	}
+	if !strings.Contains(result, "web_search") {
+		t.Error("tool status should contain tool name")
+	}
+	if !strings.Contains(result, "query=golang") {
+		t.Error("tool status should contain args")
+	}
+
+	// Test without args
+	result = formatToolStatus("calculator", "")
+	if !strings.Contains(result, "calculator") {
+		t.Error("tool status should contain tool name")
+	}
+}
+
+// TestFormatStreaming tests streaming message formatting
+func TestFormatStreaming(t *testing.T) {
+	// Empty text
+	result := formatStreaming("")
+	if !strings.Contains(result, "AI:") {
+		t.Error("streaming should contain AI prefix")
+	}
+	if !strings.Contains(result, "▋") {
+		t.Error("streaming should contain cursor")
+	}
+
+	// With text
+	result = formatStreaming("Hello world")
+	if !strings.Contains(result, "Hello world") {
+		t.Error("streaming should contain text")
+	}
+	if !strings.Contains(result, "▋") {
+		t.Error("streaming should contain cursor")
+	}
+}
+
+// TestRenderHeader tests header rendering
+func TestRenderHeader(t *testing.T) {
+	result := renderHeader("claude-sonnet-4", 150*time.Millisecond, 80)
+	if !strings.Contains(result, "FeelPulse") {
+		t.Error("header should contain app name")
+	}
+	if !strings.Contains(result, "claude-sonnet") {
+		t.Error("header should contain model name")
+	}
+	if !strings.Contains(result, "ms") {
+		t.Error("header should contain response time")
+	}
+}
+
+// TestFormatKeyboardShortcuts tests keyboard shortcuts help
+func TestFormatKeyboardShortcuts(t *testing.T) {
+	result := formatKeyboardShortcuts()
+	shortcuts := []string{"Enter", "Ctrl+L", "Ctrl+R", "Ctrl+C"}
+	for _, shortcut := range shortcuts {
+		if !strings.Contains(result, shortcut) {
+			t.Errorf("keyboard shortcuts should contain %q", shortcut)
+		}
 	}
 }

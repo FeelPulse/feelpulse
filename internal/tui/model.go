@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -35,32 +36,73 @@ const (
 	tuiUserID  = "local"
 )
 
+// Default context window size (Claude 3.5 Sonnet)
+const defaultContextSize = 200000
+
+// streamMsg is sent when streaming text arrives
+type streamMsg struct {
+	delta string
+	done  bool
+	err   error
+}
+
+// toolCallMsg is sent when a tool is being called
+type toolCallMsg struct {
+	name   string
+	args   string
+	active bool
+}
+
+// TimestampedMessage wraps a message with timestamp
+type TimestampedMessage struct {
+	types.Message
+	Timestamp time.Time
+}
+
 // Model is the bubbletea model for the TUI
 type Model struct {
 	viewport     viewport.Model
 	textarea     textarea.Model
-	messages     []types.Message
+	messages     []TimestampedMessage
 	config       *config.Config
 	agent        *agent.Router
 	session      *session.Session
 	store        *session.Store
 	usage        *usage.Tracker
 	thinking     bool
+	streaming    bool
+	streamText   string
 	err          error
 	width        int
 	height       int
 	ready        bool
 	quitting     bool
 	currentModel string
+
+	// Enhanced features
+	autocomplete     *Autocomplete
+	responseTime     time.Duration
+	responseStart    time.Time
+	currentTool      string
+	currentToolArgs  string
+	inputTokens      int
+	outputTokens     int
+	totalTokens      int
+	contextSize      int
+	lastUserMessage  string
+	tickCount        int
 }
 
-// responseMsg is sent when AI responds
+// responseMsg is sent when AI responds (streaming complete)
 type responseMsg struct {
 	text  string
 	err   error
 	usage types.Usage
 	model string
 }
+
+// tickMsg for blinking cursor animation
+type tickMsg time.Time
 
 // New creates a new TUI model
 func New(cfg *config.Config) (*Model, error) {
@@ -79,7 +121,7 @@ func New(cfg *config.Config) (*Model, error) {
 
 	// Create textarea for input
 	ta := textarea.New()
-	ta.Placeholder = "Type your message... (Enter to send, Shift+Enter for newline)"
+	ta.Placeholder = "Type your message... (Enter to send)"
 	ta.Focus()
 	ta.CharLimit = 4096
 	ta.SetWidth(80)
@@ -94,14 +136,23 @@ func New(cfg *config.Config) (*Model, error) {
 		session:      sess,
 		store:        store,
 		usage:        usageTracker,
-		messages:     []types.Message{},
+		messages:     []TimestampedMessage{},
 		currentModel: cfg.Agent.Model,
+		autocomplete: NewAutocomplete(),
+		contextSize:  defaultContextSize,
 	}, nil
 }
 
 // Init implements tea.Model
 func (m Model) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, m.tick())
+}
+
+// tick returns a command that sends tick messages for cursor animation
+func (m Model) tick() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
 // Update implements tea.Model
@@ -116,16 +167,81 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
+		case tea.KeyCtrlL:
+			// Clear conversation
+			m.session.Clear()
+			m.messages = []TimestampedMessage{}
+			m.inputTokens = 0
+			m.outputTokens = 0
+			m.totalTokens = 0
+			m.addSystemMessage("Started new conversation")
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
+
+		case tea.KeyCtrlR:
+			// Retry last message
+			if !m.thinking && !m.streaming && m.lastUserMessage != "" {
+				return m.handleInput(m.lastUserMessage)
+			}
+			return m, nil
+
+		case tea.KeyTab:
+			// Autocomplete selection
+			if m.autocomplete.IsActive() {
+				selected := m.autocomplete.Selected()
+				m.textarea.SetValue(selected)
+				m.textarea.CursorEnd()
+				m.autocomplete.Reset()
+				return m, nil
+			}
+			// Tab cycles through suggestions
+			if m.autocomplete.IsActive() {
+				m.autocomplete.Next()
+				return m, nil
+			}
+
+		case tea.KeyUp:
+			// Navigate autocomplete or scroll
+			if m.autocomplete.IsActive() {
+				m.autocomplete.Prev()
+				return m, nil
+			}
+
+		case tea.KeyDown:
+			// Navigate autocomplete
+			if m.autocomplete.IsActive() {
+				m.autocomplete.Next()
+				return m, nil
+			}
+
+		case tea.KeyEsc:
+			// Close autocomplete
+			if m.autocomplete.IsActive() {
+				m.autocomplete.Reset()
+				return m, nil
+			}
+
 		case tea.KeyEnter:
+			// If autocomplete active, select it
+			if m.autocomplete.IsActive() {
+				selected := m.autocomplete.Selected()
+				m.textarea.SetValue(selected + " ")
+				m.textarea.CursorEnd()
+				m.autocomplete.Reset()
+				return m, nil
+			}
+
 			// If shift is held, let textarea handle it (newline)
 			if msg.Alt {
 				break
 			}
 			// Submit message
-			if !m.thinking {
+			if !m.thinking && !m.streaming {
 				text := strings.TrimSpace(m.textarea.Value())
 				if text != "" {
 					m.textarea.Reset()
+					m.autocomplete.Reset()
 					return m.handleInput(text)
 				}
 			}
@@ -136,9 +252,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		headerHeight := 1
-		inputHeight := 5 // textarea + help line
-		chatHeight := m.height - headerHeight - inputHeight - 4
+		headerHeight := 3 // Rich header box
+		inputHeight := 5  // textarea + help line
+		statusHeight := 2 // tool status + context bar
+		chatHeight := m.height - headerHeight - inputHeight - statusHeight - 2
 
 		if !m.ready {
 			m.viewport = viewport.New(m.width-2, chatHeight)
@@ -152,30 +269,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea.SetWidth(m.width - 4)
 		return m, nil
 
+	case streamMsg:
+		if msg.err != nil {
+			m.streaming = false
+			m.thinking = false
+			m.err = msg.err
+			m.viewport.SetContent(m.renderMessages())
+			return m, nil
+		}
+
+		if msg.done {
+			// Streaming complete
+			m.streaming = false
+			m.responseTime = time.Since(m.responseStart)
+			return m, nil
+		}
+
+		// Accumulate streaming text
+		m.streamText += msg.delta
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+
+	case toolCallMsg:
+		if msg.active {
+			m.currentTool = msg.name
+			m.currentToolArgs = msg.args
+		} else {
+			m.currentTool = ""
+			m.currentToolArgs = ""
+		}
+		return m, nil
+
 	case responseMsg:
 		m.thinking = false
+		m.streaming = false
+		m.responseTime = time.Since(m.responseStart)
+
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
 			// Add AI response to messages
-			aiMsg := types.Message{
-				Text:  msg.text,
-				IsBot: true,
+			aiMsg := TimestampedMessage{
+				Message: types.Message{
+					Text:  msg.text,
+					IsBot: true,
+				},
+				Timestamp: time.Now(),
 			}
 			m.messages = append(m.messages, aiMsg)
-			m.session.AddMessage(aiMsg)
+			m.session.AddMessage(aiMsg.Message)
 
 			// Record usage
 			m.usage.Record(tuiChannel, tuiUserID, msg.usage.InputTokens, msg.usage.OutputTokens, msg.model)
+			m.inputTokens += msg.usage.InputTokens
+			m.outputTokens += msg.usage.OutputTokens
+			m.totalTokens = m.inputTokens + m.outputTokens
 		}
+
+		m.streamText = ""
+		m.currentTool = ""
+		m.currentToolArgs = ""
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 		return m, nil
+
+	case tickMsg:
+		m.tickCount++
+		// Only re-render if streaming (for cursor blink)
+		if m.streaming {
+			m.viewport.SetContent(m.renderMessages())
+		}
+		return m, m.tick()
 	}
 
 	// Handle textarea updates
 	m.textarea, cmd = m.textarea.Update(msg)
 	cmds = append(cmds, cmd)
+
+	// Update autocomplete based on input
+	m.autocomplete.Update(m.textarea.Value())
 
 	// Handle viewport updates
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -193,19 +366,26 @@ func (m Model) handleInput(text string) (tea.Model, tea.Cmd) {
 	}
 
 	// Regular message - add to history and send to AI
-	userMsg := types.Message{
-		Text:    text,
-		IsBot:   false,
-		Channel: tuiChannel,
+	m.lastUserMessage = text
+	userMsg := TimestampedMessage{
+		Message: types.Message{
+			Text:    text,
+			IsBot:   false,
+			Channel: tuiChannel,
+		},
+		Timestamp: time.Now(),
 	}
 	m.messages = append(m.messages, userMsg)
-	m.session.AddMessage(userMsg)
+	m.session.AddMessage(userMsg.Message)
 	m.thinking = true
+	m.streaming = true
+	m.streamText = ""
+	m.responseStart = time.Now()
 	m.viewport.SetContent(m.renderMessages())
 	m.viewport.GotoBottom()
 
-	// Send to AI asynchronously
-	return m, m.sendToAI()
+	// Send to AI asynchronously with streaming
+	return m, m.sendToAIStream()
 }
 
 // handleCommand processes slash commands
@@ -213,7 +393,10 @@ func (m Model) handleCommand(cmd Command, arg string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case CmdNew:
 		m.session.Clear()
-		m.messages = []types.Message{}
+		m.messages = []TimestampedMessage{}
+		m.inputTokens = 0
+		m.outputTokens = 0
+		m.totalTokens = 0
 		m.addSystemMessage("Started new conversation")
 
 	case CmdModel:
@@ -254,23 +437,35 @@ func (m Model) handleCommand(cmd Command, arg string) (tea.Model, tea.Cmd) {
 
 // addSystemMessage adds a system message to the chat
 func (m *Model) addSystemMessage(text string) {
-	m.messages = append(m.messages, types.Message{
-		Text:  text,
-		IsBot: true,
-		Metadata: map[string]any{
-			"system": true,
+	m.messages = append(m.messages, TimestampedMessage{
+		Message: types.Message{
+			Text:  text,
+			IsBot: true,
+			Metadata: map[string]any{
+				"system": true,
+			},
 		},
+		Timestamp: time.Now(),
 	})
 }
 
-// sendToAI sends the conversation to the AI and returns a response
-func (m Model) sendToAI() tea.Cmd {
+// sendToAIStream sends the conversation to the AI with streaming
+func (m Model) sendToAIStream() tea.Cmd {
 	return func() tea.Msg {
 		// Get all messages from session
 		messages := m.session.GetAllMessages()
 
-		// Call the agent
-		resp, err := m.agent.ProcessWithHistory(messages)
+		// Create streaming callback that sends deltas to TUI
+		// Note: In real implementation, we'd use a channel to send
+		// deltas back to the bubbletea program. For now, we'll
+		// collect and send as a single response.
+
+		// Call the agent with streaming
+		resp, err := m.agent.ProcessWithHistoryStream(messages, func(delta string) {
+			// In a full implementation, we'd send this via a channel
+			// to the bubbletea program. For now, this accumulates in the agent.
+		})
+
 		if err != nil {
 			return responseMsg{err: err}
 		}
@@ -288,8 +483,8 @@ func (m Model) sendToAI() tea.Cmd {
 
 		model := m.currentModel
 		if resp.Metadata != nil {
-			if m, ok := resp.Metadata["model"].(string); ok {
-				model = m
+			if mdl, ok := resp.Metadata["model"].(string); ok {
+				model = mdl
 			}
 		}
 
@@ -314,8 +509,8 @@ func (m Model) View() string {
 	// Build the UI
 	var b strings.Builder
 
-	// Header
-	header := headerStyle.Width(m.width).Render(fmt.Sprintf("  🫀 FeelPulse  [model: %s]", m.currentModel))
+	// Rich header
+	header := renderHeader(m.currentModel, m.responseTime, m.width)
 	b.WriteString(header)
 	b.WriteString("\n")
 
@@ -324,13 +519,32 @@ func (m Model) View() string {
 	b.WriteString(chatContent)
 	b.WriteString("\n")
 
+	// Tool status line (if active)
+	if m.currentTool != "" {
+		toolStatus := formatToolStatus(m.currentTool, m.currentToolArgs)
+		b.WriteString(toolStatus)
+		b.WriteString("\n")
+	}
+
+	// Context progress bar
+	contextBar := formatProgressBar(m.totalTokens, m.contextSize, m.width-4)
+	b.WriteString(contextBar)
+	b.WriteString("\n")
+
+	// Autocomplete popup (if active)
+	if m.autocomplete.IsActive() {
+		popup := m.autocomplete.View(m.width - 4)
+		b.WriteString(popup)
+		b.WriteString("\n")
+	}
+
 	// Input area
 	inputBox := inputBorderStyle.Width(m.width - 2).Render(m.textarea.View())
 	b.WriteString(inputBox)
 	b.WriteString("\n")
 
-	// Help bar
-	help := helpStyle.Render("[Enter] send  [Shift+Enter] newline  [Ctrl+C] quit  [/help] commands")
+	// Keyboard shortcuts help bar
+	help := formatKeyboardShortcuts()
 	b.WriteString(help)
 
 	// Error display
@@ -344,28 +558,42 @@ func (m Model) View() string {
 
 // renderMessages renders all messages for the viewport
 func (m Model) renderMessages() string {
-	if len(m.messages) == 0 {
+	if len(m.messages) == 0 && !m.streaming {
 		return systemStyle.Render("Welcome to FeelPulse TUI! Type a message to start chatting.\n\nCommands: /new, /model, /usage, /help, /quit")
 	}
 
 	var lines []string
 	for _, msg := range m.messages {
-		formatted := formatMessage(msg)
+		formatted := m.formatTimestampedMessage(msg)
 		wrapped := wrapText(formatted, m.viewport.Width-4)
 		lines = append(lines, wrapped)
 		lines = append(lines, "") // Add blank line between messages
 	}
 
-	// Add thinking indicator if waiting
-	if m.thinking {
+	// Add streaming text if active
+	if m.streaming {
+		// Show blinking cursor based on tick count
+		showCursor := m.tickCount%2 == 0
+		if showCursor {
+			lines = append(lines, formatStreamingWithMarkdown(m.streamText, m.viewport.Width-4))
+		} else {
+			if m.streamText == "" {
+				lines = append(lines, aiPrefixStyle.Render("AI:")+" ")
+			} else {
+				prefix := aiPrefixStyle.Render("AI:")
+				rendered := renderIfMarkdown(m.streamText, m.viewport.Width-10)
+				lines = append(lines, prefix+" "+rendered)
+			}
+		}
+	} else if m.thinking {
 		lines = append(lines, formatThinking())
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-// formatMessage formats a single message
-func formatMessage(msg types.Message) string {
+// formatTimestampedMessage formats a single message with timestamp
+func (m Model) formatTimestampedMessage(msg TimestampedMessage) string {
 	// Check if it's a system message
 	if msg.Metadata != nil {
 		if sys, ok := msg.Metadata["system"].(bool); ok && sys {
@@ -373,10 +601,22 @@ func formatMessage(msg types.Message) string {
 		}
 	}
 
+	// Format message content
+	var content string
 	if msg.IsBot {
-		return formatAIMessage(msg.Text)
+		// AI messages get markdown rendering
+		content = formatAIMessageWithMarkdown(msg.Text, m.viewport.Width-4)
+	} else {
+		content = formatUserMessage(msg.Text)
 	}
-	return formatUserMessage(msg.Text)
+
+	// Add timestamp
+	if !msg.Timestamp.IsZero() {
+		timestamp := formatTimestamp(msg.Timestamp)
+		content = content + "  " + timestamp
+	}
+
+	return content
 }
 
 // parseCommand parses a slash command and its argument
@@ -422,7 +662,16 @@ func helpText() string {
   /model NAME  Switch to a different model
   /usage       Show token usage statistics
   /help        Show this help message
-  /quit        Exit the TUI`
+  /quit        Exit the TUI
+
+Keyboard shortcuts:
+  Enter        Send message
+  Shift+Enter  New line
+  Ctrl+L       Clear conversation
+  Ctrl+R       Retry last message
+  Ctrl+C       Quit
+  Tab          Select autocomplete
+  ↑/↓          Navigate autocomplete`
 }
 
 // wrapText wraps text to fit within the given width
