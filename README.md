@@ -1,10 +1,46 @@
 # 🫀 FeelPulse
 
+[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/Tests-Passing-brightgreen.svg)](https://github.com/FeelPulse/feelpulse/actions)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](Dockerfile)
+
 A fast, minimal AI assistant platform written in Go. FeelPulse provides a Telegram bot interface to Claude AI with support for conversation persistence, workspace files (SOUL.md/USER.md/MEMORY.md), skills/tools, text-to-speech, personality profiles, and more.
 
 **Design Philosophy:** Simple, fast, minimal dependencies. Just Anthropic + Telegram. Built for personal AI assistants.
 
-## Features
+---
+
+## 🚀 Quick Start
+
+Get running in 5 commands:
+
+```bash
+# 1. Clone and build
+git clone https://github.com/FeelPulse/feelpulse.git
+cd feelpulse && make build
+
+# 2. Initialize config
+./build/feelpulse init
+
+# 3. Configure API key (or Claude subscription token)
+./build/feelpulse auth
+
+# 4. Add your Telegram bot token to ~/.feelpulse/config.yaml
+
+# 5. Start!
+./build/feelpulse start
+```
+
+Or with Docker:
+
+```bash
+docker run -d -p 18789:18789 -v ~/.feelpulse:/home/feelpulse/.feelpulse feelpulse:latest
+```
+
+---
+
+## ✨ Features
 
 ### Core
 - 🤖 **Claude AI Integration** — Native Anthropic Messages API client (Sonnet 4, Opus 4, etc.)
@@ -13,6 +49,7 @@ A fast, minimal AI assistant platform written in Go. FeelPulse provides a Telegr
 - 📂 **Workspace Files** — SOUL.md (persona), USER.md (user context), MEMORY.md (long-term memory)
 - 📦 **Context Compaction** — Automatic conversation summarization when context grows large
 - 🔄 **Hot Reload** — Config changes apply without restart
+- 🛠️ **Tool Calling** — Full agentic loop with tool execution (exec, browser, custom)
 
 ### Channels & Interfaces
 - 📱 **Telegram Bot** — Rich commands, inline keyboards, file exports
@@ -26,30 +63,44 @@ A fast, minimal AI assistant platform written in Go. FeelPulse provides a Telegr
 - 🎭 **Personality Profiles** — Switch between different SOUL.md variants
 - ⏰ **Reminders** — Persistent reminders with relative/absolute time support
 - 💓 **Heartbeat** — Proactive periodic checks (optional)
+- 🌐 **Browser Automation** — Web scraping and automation tools
 
 ### Infrastructure
 - ⏱️ **Rate Limiting** — Configurable per-user message rate limits
 - 🔒 **User Allowlist** — Restrict bot to specific Telegram usernames
 - 🔐 **Dual Auth** — API key or Claude subscription token (sk-ant-oat)
 - 🐧 **systemd Service** — Built-in service installation commands
+- 📊 **Prometheus Metrics** — `/metrics` endpoint for monitoring
+- 🐳 **Docker Ready** — Multi-stage Dockerfile included
 
-## Quick Start
+---
 
-```bash
-# Build
-make build
+## 📊 TUI Screenshot
 
-# Initialize config
-./build/feelpulse init
-
-# Configure authentication
-./build/feelpulse auth
-
-# Start the gateway
-./build/feelpulse start
+<!-- Add your TUI screenshot here -->
+```
+┌─────────────────────────────────────────────────┐
+│  🫀 FeelPulse TUI                              │
+├─────────────────────────────────────────────────┤
+│  You: Hello!                                    │
+│                                                 │
+│  Claude: Hi there! How can I help you today?   │
+│                                                 │
+│  You: What's the weather like?                  │
+│                                                 │
+│  Claude: I don't have direct access to weather │
+│  data, but I can help you search for it or     │
+│  provide general information about weather     │
+│  patterns in specific regions.                 │
+│                                                 │
+├─────────────────────────────────────────────────┤
+│  > Type your message...                         │
+└─────────────────────────────────────────────────┘
 ```
 
-## Installation
+---
+
+## 📦 Installation
 
 ### From Source
 
@@ -65,7 +116,19 @@ make build
 go install github.com/FeelPulse/feelpulse/cmd/feelpulse@latest
 ```
 
-## Configuration
+### Docker
+
+```bash
+# Build image
+make docker-build
+
+# Or use docker-compose
+docker-compose up -d
+```
+
+---
+
+## ⚙️ Configuration
 
 After `feelpulse init`, edit `~/.feelpulse/config.yaml`:
 
@@ -110,6 +173,22 @@ heartbeat:
 tts:
   enabled: false
   command: ""               # Auto-detects: espeak, say (macOS), festival
+
+tools:
+  exec:
+    enabled: false          # Enable exec tool (security risk!)
+    allowedCommands: []     # Whitelist of allowed commands
+    timeoutSeconds: 30
+
+browser:
+  enabled: false
+  headless: true
+  stealth: true
+  timeoutSeconds: 30
+
+metrics:
+  enabled: true
+  path: /metrics
 ```
 
 ### Getting API Keys
@@ -118,7 +197,9 @@ tts:
 2. **Claude Subscription Token**: Run `claude setup-token` and use `feelpulse auth`
 3. **Telegram Bot Token**: Create via [@BotFather](https://t.me/BotFather)
 
-## CLI Commands
+---
+
+## 🖥️ CLI Commands
 
 ```bash
 feelpulse init           # Create default config
@@ -141,7 +222,9 @@ feelpulse version        # Print version
 feelpulse help           # Show help
 ```
 
-## Telegram Commands
+---
+
+## 📱 Telegram Commands
 
 | Command | Description |
 |---------|-------------|
@@ -160,14 +243,18 @@ feelpulse help           # Show help
 | `/reminders` | List active reminders |
 | `/cancel <id>` | Cancel a reminder |
 | `/usage` | Show token usage stats |
+| `/compact` | Force context compaction |
 | `/help` | Show all commands |
 
-## API Endpoints
+---
+
+## 🌐 API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check with status |
 | `/dashboard` | GET | Simple web dashboard |
+| `/metrics` | GET | Prometheus metrics |
 | `/v1/chat/completions` | POST | OpenAI-compatible API |
 | `/hooks/*` | POST | Webhook handlers |
 
@@ -184,7 +271,9 @@ curl http://localhost:18789/v1/chat/completions \
   }'
 ```
 
-## Workspace Files
+---
+
+## 📂 Workspace Files
 
 Initialize workspace with `feelpulse workspace init`:
 
@@ -219,7 +308,9 @@ You are a helpful personal assistant named Pulse.
 - Be proactive about reminders
 ```
 
-## Skills System
+---
+
+## 🛠️ Skills System
 
 Skills are AI tools defined by `SKILL.md` files:
 
@@ -243,31 +334,79 @@ Get current weather for a location.
 
 If `run.sh` exists and is executable, it will be called with parameters as arguments.
 
-## Makefile Targets
+---
 
-```bash
-make build     # Build binary to ./build/
-make install   # Install to $GOPATH/bin
-make clean     # Remove build artifacts
-make test      # Run tests
-make run       # Build and run
-make dev       # Format, vet, build, run
-make check     # Format, vet, test
+## ⚡ Performance Benchmarks
+
+Session operations are optimized for low latency:
+
+```
+BenchmarkSessionGet              	 7623697	   164.7 ns/op	    23 B/op	   2 allocs/op
+BenchmarkSessionGetOrCreate      	  820837	  1442 ns/op	   260 B/op	   4 allocs/op
+BenchmarkSessionAddMessage       	 8606056	   130.5 ns/op	   236 B/op	   0 allocs/op
+BenchmarkSessionGetAllMessages   	 1145912	   967.3 ns/op	  6144 B/op	   1 allocs/op
+BenchmarkContextCompaction       	 1453856	   920.2 ns/op	  1744 B/op	   3 allocs/op
+BenchmarkEstimateTokens          	1000000000	 0.37 ns/op	     0 B/op	   0 allocs/op
+BenchmarkConcurrentSessionAccess 	  761701	  1432 ns/op	  6400 B/op	   3 allocs/op
+BenchmarkSessionCount            	236135662	 5.345 ns/op	     0 B/op	   0 allocs/op
 ```
 
-## Architecture
+Run benchmarks: `make bench`
+
+---
+
+## 📋 Makefile Targets
+
+```bash
+# Build & Install
+make build           # Build binary to ./build/
+make install         # Install to $GOPATH/bin
+make clean           # Remove build artifacts
+
+# Run
+make start           # Start gateway (foreground)
+make start-bg        # Start gateway (background)
+make stop            # Stop background gateway
+make tui             # Launch terminal chat
+
+# Development
+make test            # Run all tests with race detector
+make test-short      # Run tests (faster, no race)
+make bench           # Run benchmarks
+make fmt             # Format code
+make vet             # Vet code
+make lint            # Run golangci-lint
+make check           # Format, vet, and test
+
+# Docker
+make docker-build    # Build Docker image
+make docker-run      # Run Docker container
+make docker-stop     # Stop Docker container
+make docker-push     # Push to registry
+
+# Service
+make install-service    # Install systemd service
+make uninstall-service  # Uninstall systemd service
+```
+
+---
+
+## 🏗️ Architecture
 
 ```
 feelpulse/
 ├── cmd/feelpulse/     # CLI entry point
 ├── internal/
 │   ├── agent/         # AI providers (Anthropic, OpenAI)
+│   ├── browser/       # Browser automation tools
 │   ├── channel/       # Chat channels (Telegram, Discord)
 │   ├── command/       # Slash command handler
 │   ├── config/        # YAML configuration
 │   ├── gateway/       # HTTP server, routing, dashboard
 │   ├── heartbeat/     # Proactive check service
+│   ├── logger/        # Structured logging
 │   ├── memory/        # Workspace files manager
+│   ├── metrics/       # Prometheus metrics
 │   ├── ratelimit/     # Per-user rate limiting
 │   ├── scheduler/     # Reminder system
 │   ├── session/       # Conversation state, compaction
@@ -281,36 +420,72 @@ feelpulse/
 └── pkg/types/         # Shared types
 ```
 
-## Comparison with Other Tools
+---
 
-| Feature | FeelPulse | OpenClaw | Typical Chatbot |
-|---------|-----------|----------|-----------------|
-| Language | Go | TypeScript | Various |
-| Startup Time | ~10ms | ~500ms | Varies |
-| Dependencies | Minimal | Heavy | Varies |
+## 📊 Comparison
+
+| Feature | FeelPulse | OpenClaw | Raw Claude API |
+|---------|-----------|----------|----------------|
+| Language | Go | TypeScript | — |
+| Startup Time | ~10ms | ~500ms | — |
+| Memory Usage | ~20MB | ~100MB | — |
+| Dependencies | Minimal (4) | Heavy | — |
 | Workspace Files | ✅ | ✅ | ❌ |
 | Skills System | ✅ | ✅ | ❌ |
+| Tool Calling | ✅ | ✅ | ✅ |
 | Context Compaction | ✅ | ❌ | ❌ |
+| Session Persistence | ✅ SQLite | ✅ | ❌ |
 | TTS | ✅ | ✅ | ❌ |
 | Hot Reload | ✅ | ❌ | ❌ |
 | systemd Service | ✅ | ❌ | ❌ |
+| Prometheus Metrics | ✅ | ❌ | ❌ |
+| Docker Support | ✅ | ✅ | — |
 
-## Dependencies
+---
 
-- Go 1.21+
+## 📦 Dependencies
+
+- Go 1.23+
 - `gopkg.in/yaml.v3` — YAML config
 - `github.com/mattn/go-sqlite3` — Session persistence
 - `github.com/google/uuid` — UUID generation
 - `github.com/charmbracelet/bubbletea` — TUI framework
 - `github.com/charmbracelet/lipgloss` — TUI styling
 
-## License
+---
 
-MIT
+## 🤝 Contributing
 
-## Contributing
+Contributions are welcome! Please:
 
-Issues and PRs welcome! Please:
-1. Run `make check` before submitting
-2. Add tests for new features
-3. Keep the minimal-dependency philosophy
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Run `make check` before committing
+4. Add tests for new features
+5. Keep the minimal-dependency philosophy
+6. Submit a Pull Request
+
+### Code Style
+
+- Run `make fmt` before committing
+- Use meaningful variable names
+- Add comments for complex logic
+- Keep functions small and focused
+
+---
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- [Anthropic](https://anthropic.com) for Claude
+- [Charm](https://charm.sh) for bubbletea TUI framework
+- [Telegram](https://telegram.org) for the bot platform
+
+---
+
+Made with 💜 by the FeelPulse team
