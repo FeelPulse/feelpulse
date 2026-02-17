@@ -19,6 +19,7 @@ type Session struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	MaxHistory int
+	Model      string // Per-session model override
 	mu         sync.Mutex
 }
 
@@ -136,13 +137,31 @@ func (sess *Session) GetAllMessages() []types.Message {
 	return result
 }
 
-// Clear removes all messages from the session
+// Clear removes all messages from the session and resets model
 func (sess *Session) Clear() {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
 	sess.Messages = make([]types.Message, 0)
+	sess.Model = ""
 	sess.UpdatedAt = time.Now()
+}
+
+// SetModel sets a per-session model override
+func (sess *Session) SetModel(model string) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	sess.Model = model
+	sess.UpdatedAt = time.Now()
+}
+
+// GetModel returns the session's model (or empty for default)
+func (sess *Session) GetModel() string {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	return sess.Model
 }
 
 // Len returns the number of messages in the session
@@ -151,4 +170,44 @@ func (sess *Session) Len() int {
 	defer sess.mu.Unlock()
 
 	return len(sess.Messages)
+}
+
+// supportedModels is the list of known valid models
+var supportedModels = []string{
+	// Anthropic Claude
+	"claude-sonnet-4-20250514",
+	"claude-opus-4-20250514",
+	"claude-3-5-sonnet-20241022",
+	"claude-3-opus-20240229",
+	"claude-3-sonnet-20240229",
+	"claude-3-haiku-20240307",
+	"claude-3-opus",
+	"claude-3-sonnet",
+	"claude-3-haiku",
+	// OpenAI GPT
+	"gpt-4o",
+	"gpt-4o-mini",
+	"gpt-4-turbo",
+	"gpt-4",
+	"gpt-3.5-turbo",
+	"o1-preview",
+	"o1-mini",
+}
+
+// ValidateModel checks if a model name is supported
+func ValidateModel(model string) bool {
+	if model == "" {
+		return false
+	}
+	for _, m := range supportedModels {
+		if m == model {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportedModels returns the list of supported models
+func SupportedModels() []string {
+	return supportedModels
 }

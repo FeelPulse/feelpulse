@@ -96,6 +96,10 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleReminders(msg.Channel, userID)
 	case "usage", "stats":
 		response = h.handleUsage(msg.Channel, userID)
+	case "model":
+		response = h.handleModel(msg.Channel, userID, args)
+	case "models":
+		response = h.handleModels()
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -221,12 +225,59 @@ func (h *Handler) handleUsage(channel, userID string) string {
 	return stats.String()
 }
 
+// handleModel switches the model for the current session
+func (h *Handler) handleModel(channel, userID, args string) string {
+	sess := h.sessions.GetOrCreate(channel, userID)
+	
+	// If no argument, show current model
+	if args == "" {
+		current := sess.GetModel()
+		if current == "" {
+			return "🤖 Using default model from config.\n\nTo switch: /model <name>\nList models: /models"
+		}
+		return fmt.Sprintf("🤖 Current model: *%s*\n\nTo switch: /model <name>\nList models: /models", current)
+	}
+
+	// Validate and set new model
+	model := strings.TrimSpace(args)
+	if !session.ValidateModel(model) {
+		return fmt.Sprintf("❌ Unknown model: %s\n\nUse /models to see available options.", model)
+	}
+
+	sess.SetModel(model)
+	return fmt.Sprintf("✅ Model switched to: *%s*", model)
+}
+
+// handleModels lists available models
+func (h *Handler) handleModels() string {
+	models := session.SupportedModels()
+	
+	var sb strings.Builder
+	sb.WriteString("🤖 *Available Models*\n\n")
+	sb.WriteString("*Anthropic Claude:*\n")
+	for _, m := range models {
+		if strings.HasPrefix(m, "claude") {
+			sb.WriteString(fmt.Sprintf("  • %s\n", m))
+		}
+	}
+	sb.WriteString("\n*OpenAI GPT:*\n")
+	for _, m := range models {
+		if strings.HasPrefix(m, "gpt") || strings.HasPrefix(m, "o1") {
+			sb.WriteString(fmt.Sprintf("  • %s\n", m))
+		}
+	}
+	sb.WriteString("\nSwitch: /model <name>")
+	return sb.String()
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse Commands*
 
 /new — Start a new conversation (clear history)
 /history [n] — Show last n messages (default: 10)
+/model [name] — Show or switch AI model
+/models — List available models
 /remind in <time> <message> — Set a reminder
 /reminders — List active reminders
 /usage — Show token usage statistics
