@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -128,6 +129,25 @@ func New(cfg *config.Config) *Gateway {
 	tools.RegisterFileTools(toolRegistry, fileCfg)
 	if cfg.Tools.File.Enabled {
 		log.Info("📁 File tools enabled (sandboxed to %s)", workspacePath)
+	}
+
+	// Register read_skill tool for on-demand skill loading
+	if skillNames := memMgr.ListSkillNames(); len(skillNames) > 0 {
+		toolRegistry.Register(&tools.Tool{
+			Name:        "read_skill",
+			Description: "Read the full documentation for a skill. Available skills: " + strings.Join(skillNames, ", "),
+			Parameters: []tools.Parameter{
+				{Name: "name", Type: "string", Description: "Skill name to read", Required: true},
+			},
+			Handler: func(ctx context.Context, params map[string]any) (string, error) {
+				name, _ := params["name"].(string)
+				if name == "" {
+					return "", fmt.Errorf("skill name is required")
+				}
+				return memMgr.ReadSkill(name)
+			},
+		})
+		log.Info("📚 %d skills available (on-demand): %s", len(skillNames), strings.Join(skillNames, ", "))
 	}
 
 	gw := &Gateway{

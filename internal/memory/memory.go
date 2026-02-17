@@ -2,6 +2,7 @@ package memory
 
 import (
 	"embed"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,10 +23,10 @@ type Manager struct {
 	skills []skillEntry // loaded skill docs
 }
 
-// skillEntry holds a loaded skill's name and content
+// skillEntry holds a loaded skill's name and description
 type skillEntry struct {
-	Name    string
-	Content string
+	Name        string
+	Description string // first non-empty, non-heading line from SKILL.md
 }
 
 // NewManager creates a new workspace Manager for the given path
@@ -60,9 +61,10 @@ func (m *Manager) Load() error {
 			}
 			skillPath := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
 			if data, err := os.ReadFile(skillPath); err == nil {
+				desc := extractSkillDescription(string(data))
 				m.skills = append(m.skills, skillEntry{
-					Name:    entry.Name(),
-					Content: string(data),
+					Name:        entry.Name(),
+					Description: desc,
 				})
 			}
 		}
@@ -109,13 +111,13 @@ func (m *Manager) BuildSystemPrompt(defaultPrompt string) string {
 		parts = append(parts, "\n\n## Memory\n"+m.memory)
 	}
 
-	// Append skills as reference documentation
+	// List available skills (loaded on demand via read_skill tool)
 	if len(m.skills) > 0 {
-		var skillParts []string
+		var lines []string
 		for _, s := range m.skills {
-			skillParts = append(skillParts, "### Skill: "+s.Name+"\n"+s.Content)
+			lines = append(lines, "- **"+s.Name+"**: "+s.Description)
 		}
-		parts = append(parts, "\n\n## Available Skills\n\nUse these skills via the exec tool when the relevant CLI is available.\n\n"+strings.Join(skillParts, "\n\n---\n\n"))
+		parts = append(parts, "\n\n## Available Skills\n\nUse the `read_skill` tool to load a skill's full documentation before using it.\n\n"+strings.Join(lines, "\n"))
 	}
 
 	result := strings.Join(parts, "")
@@ -200,6 +202,37 @@ Example:
 	}
 
 	return nil
+}
+
+// extractSkillDescription extracts the first descriptive line from SKILL.md content
+func extractSkillDescription(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		return trimmed
+	}
+	return ""
+}
+
+// ReadSkill reads the full SKILL.md content for a skill by name
+func (m *Manager) ReadSkill(name string) (string, error) {
+	skillPath := filepath.Join(m.path, "skills", name, "SKILL.md")
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		return "", fmt.Errorf("skill '%s' not found", name)
+	}
+	return string(data), nil
+}
+
+// ListSkillNames returns the names of all loaded skills
+func (m *Manager) ListSkillNames() []string {
+	names := make([]string, len(m.skills))
+	for i, s := range m.skills {
+		names[i] = s.Name
+	}
+	return names
 }
 
 // bundledSkills contains built-in skills that ship with FeelPulse
