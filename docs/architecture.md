@@ -222,15 +222,14 @@ class Manager {
   +BuildSystemPrompt(base string) string
 }
 
-rectangle "Workspace Files\n(~/.feelpulse/workspace/)" as WS #lightyellow {
-  rectangle "SOUL.md\n(persona / AI identity)" as SOUL #fff2cc
-  rectangle "USER.md\n(user context)" as USERF #fff2cc
-  rectangle "MEMORY.md\n(long-term memory)" as MEMF #fff2cc
-}
+note as WS
+  <b>~/.feelpulse/workspace/</b>
+  SOUL.md — persona / AI identity
+  USER.md — user context
+  MEMORY.md — long-term memory
+end note
 
-Manager --> SOUL : reads
-Manager --> USERF : reads
-Manager --> MEMF : reads
+Manager --> WS : reads files
 @enduml
 ```
 

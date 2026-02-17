@@ -242,11 +242,16 @@ component "Compactor\nsession/compact.go\n\nEstimate tokens: len/4\nIf > thresho
 
 component "Memory Manager\nmemory/memory.go\n\nLoads on startup.\nReloads on config change.\nBuilds layered prompt." as MEM
 
-rectangle "Workspace Files\n(~/.feelpulse/workspace/)" as WORKSPACE #lightyellow {
-  rectangle "SOUL.md\nPersona & identity\nReplaces base system\nprompt if present" as SOUL #fff2cc
-  rectangle "USER.md\nUser context:\nname, timezone, prefs\nAppended to prompt" as USER_F #fff2cc
-  rectangle "MEMORY.md\nLong-term memories:\ndecisions, events\nAppended to prompt" as MEM_F #fff2cc
-}
+rectangle "SOUL.md\nPersona & identity\nReplaces base system\nprompt if present" as SOUL #FFF2CC
+rectangle "USER.md\nUser context:\nname, timezone, prefs\nAppended to prompt" as USER_F #FFF2CC
+rectangle "MEMORY.md\nLong-term memories:\ndecisions, events\nAppended to prompt" as MEM_F #FFF2CC
+
+note as WS_NOTE
+  <b>~/.feelpulse/workspace/</b>
+end note
+WS_NOTE .. SOUL
+WS_NOTE .. USER_F
+WS_NOTE .. MEM_F
 
 MAP "1" --> "*" SESS_OBJ
 SESS_OBJ --> COMP : when len(messages)\nexceeds 80k tokens
