@@ -89,6 +89,12 @@ func (c *Compactor) CompactIfNeeded(messages []types.Message) ([]types.Message, 
 		return messages, nil
 	}
 
+	return c.ForceCompact(messages)
+}
+
+// ForceCompact compacts the conversation regardless of token count
+// Used by the /compact command
+func (c *Compactor) ForceCompact(messages []types.Message) ([]types.Message, error) {
 	toSummarize, toKeep := c.SplitMessages(messages)
 	if len(toSummarize) == 0 {
 		return messages, nil

@@ -270,6 +270,16 @@ func (sess *Session) GetAllMessages() []types.Message {
 	return result
 }
 
+// ReplaceHistory replaces all messages in the session (used by compaction)
+func (sess *Session) ReplaceHistory(messages []types.Message) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	sess.Messages = make([]types.Message, len(messages))
+	copy(sess.Messages, messages)
+	sess.UpdatedAt = time.Now()
+}
+
 // Clear removes all messages from the session and resets model
 func (sess *Session) Clear() {
 	sess.mu.Lock()

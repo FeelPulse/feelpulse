@@ -15,6 +15,17 @@ import (
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
+// BrowserNavigator interface for /browse command
+type BrowserNavigator interface {
+	Navigate(params map[string]interface{}) (string, error)
+}
+
+// ContextCompactor interface for /compact command
+type ContextCompactor interface {
+	CompactIfNeeded(messages []types.Message) ([]types.Message, error)
+	ForceCompact(messages []types.Message) ([]types.Message, error)
+}
+
 // Handler processes slash commands
 type Handler struct {
 	sessions  *session.Store
@@ -22,6 +33,8 @@ type Handler struct {
 	usage     *usage.Tracker
 	skills    *skills.Manager
 	cfg       *config.Config
+	browser   BrowserNavigator
+	compactor ContextCompactor
 }
 
 // NewHandler creates a new command handler
@@ -45,6 +58,16 @@ func (h *Handler) SetUsageTracker(t *usage.Tracker) {
 // SetSkillsManager sets the skills manager
 func (h *Handler) SetSkillsManager(m *skills.Manager) {
 	h.skills = m
+}
+
+// SetBrowser sets the browser for /browse command
+func (h *Handler) SetBrowser(b BrowserNavigator) {
+	h.browser = b
+}
+
+// SetCompactor sets the compactor for /compact command
+func (h *Handler) SetCompactor(c ContextCompactor) {
+	h.compactor = c
 }
 
 // IsCommand checks if a message is a slash command
@@ -119,6 +142,10 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleProfile(msg.Channel, userID, args)
 	case "export":
 		return h.handleExport(msg.Channel, userID, msg)
+	case "browse":
+		response = h.handleBrowse(msg.Channel, userID, args)
+	case "compact":
+		response = h.handleCompact(msg.Channel, userID)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -196,9 +223,14 @@ func (h *Handler) handleRemind(ch, userID, args string) string {
 		return "❌ Reminders are not enabled."
 	}
 
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "⏰ *Usage:* `/remind in <duration> <message>`\n\n*Examples:*\n  `/remind in 10m check email`\n  `/remind in 1h call mom`\n  `/remind in 2d submit report`\n\n*Durations:* `m`=minutes, `h`=hours, `d`=days"
+	}
+
 	durationStr, message, err := scheduler.ParseRemindCommand(args)
 	if err != nil {
-		return fmt.Sprintf("❌ %v\n\nUsage: /remind in <duration> <message>\nExamples:\n  /remind in 10m check email\n  /remind in 1h call mom\n  /remind in 2d submit report", err)
+		return fmt.Sprintf("❌ %v\n\n*Usage:* `/remind in <duration> <message>`\n\n*Examples:*\n  `/remind in 10m check email`\n  `/remind in 1h call mom`", err)
 	}
 
 	duration, err := scheduler.ParseDuration(durationStr)
@@ -464,6 +496,73 @@ func (h *Handler) handleProfile(ch, userID, args string) string {
 	}
 }
 
+// handleBrowse navigates to a URL and returns a summary
+func (h *Handler) handleBrowse(ch, userID, args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "❌ *Usage:* `/browse <url>`\n\nExample:\n  `/browse https://example.com`\n\nThis fetches the page and returns its text content."
+	}
+
+	if h.browser == nil {
+		return "❌ Browser tools are not enabled.\n\nEnable browser in config:\n```yaml\nbrowser:\n  enabled: true\n```"
+	}
+
+	// Add https:// if no scheme provided
+	url := args
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "https://" + url
+	}
+
+	result, err := h.browser.Navigate(map[string]interface{}{"url": url})
+	if err != nil {
+		return fmt.Sprintf("❌ Failed to browse: %v", err)
+	}
+
+	// Truncate long results
+	const maxLen = 3000
+	if len(result) > maxLen {
+		result = result[:maxLen] + "\n\n... (truncated)"
+	}
+
+	return fmt.Sprintf("🌐 *Page content:*\n\n%s", result)
+}
+
+// handleCompact manually triggers context compaction
+func (h *Handler) handleCompact(ch, userID string) string {
+	if h.compactor == nil {
+		return "❌ Context compaction is not enabled."
+	}
+
+	sess, exists := h.sessions.Get(ch, userID)
+	if !exists || sess.Len() == 0 {
+		return "📭 No conversation to compact."
+	}
+
+	messages := sess.GetAllMessages()
+	originalCount := len(messages)
+	originalTokens := session.EstimateHistoryTokens(messages)
+
+	compacted, err := h.compactor.ForceCompact(messages)
+	if err != nil {
+		return fmt.Sprintf("❌ Compaction failed: %v", err)
+	}
+
+	if len(compacted) >= originalCount {
+		return "ℹ️ Nothing to compact — conversation is already compact."
+	}
+
+	// Update session with compacted history
+	sess.ReplaceHistory(compacted)
+
+	newTokens := session.EstimateHistoryTokens(compacted)
+	return fmt.Sprintf("📦 *Compacted conversation*\n\n"+
+		"Messages: %d → %d\n"+
+		"Est. tokens: ~%dk → ~%dk\n\n"+
+		"Older messages have been summarized.",
+		originalCount, len(compacted),
+		originalTokens/1000, newTokens/1000)
+}
+
 // handleCancel cancels a reminder by ID
 func (h *Handler) handleCancel(ch, userID, args string) string {
 	if h.scheduler == nil {
@@ -502,6 +601,7 @@ func (h *Handler) handleHelp() string {
   /clear — Alias for /new
   /history [N] — Show recent messages (default 10)
   /export — Export conversation as .txt file
+  /compact — Manually compress conversation history
 
 🤖 *AI Model*
   /model — Show or switch AI model
@@ -512,6 +612,9 @@ func (h *Handler) handleHelp() string {
   /profile list — List available profiles
   /profile use <name> — Switch profile
   /profile reset — Reset to default
+
+🌐 *Browser*
+  /browse <url> — Fetch page content
 
 🔊 *Voice*
   /tts — Show TTS status

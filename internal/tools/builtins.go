@@ -19,6 +19,12 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(webSearchTool())
 }
 
+// BrowserToolRegistrar is an interface for browser tool registration
+// This allows the browser package to register its tools without import cycles
+type BrowserToolRegistrar interface {
+	RegisterBrowserTools(r *Registry)
+}
+
 // execTool creates the exec tool for running shell commands
 func execTool() *Tool {
 	return &Tool{

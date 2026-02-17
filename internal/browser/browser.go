@@ -2,6 +2,7 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -766,4 +767,108 @@ func GetScreenshotPath(result string) string {
 // TempDir returns the path to the browser temp directory for screenshots
 func TempDir() string {
 	return filepath.Join(os.TempDir(), "feelpulse-browser")
+}
+
+// ToolRegistry interface for avoiding import cycles
+type ToolRegistry interface {
+	Register(tool any)
+}
+
+// ToolParam represents a tool parameter
+type ToolParam struct {
+	Name        string
+	Type        string
+	Description string
+	Required    bool
+}
+
+// ToolDefinitionForRegistry creates a tool definition compatible with the tools.Registry
+type ToolDefinitionForRegistry struct {
+	Name        string
+	Description string
+	Parameters  []ToolParam
+	Handler     func(ctx context.Context, params map[string]interface{}) (string, error)
+}
+
+// RegisterTools registers all browser tools with the given registry
+// This is called by the gateway to wire browser tools into the agentic loop
+func (b *Browser) RegisterTools(register func(name, description string, params []ToolParam, handler func(ctx context.Context, params map[string]interface{}) (string, error))) {
+	// browser_navigate
+	register(
+		"browser_navigate",
+		"Open a URL in the browser and return the page title and full text content (cleaned, no HTML tags)",
+		[]ToolParam{
+			{Name: "url", Type: "string", Description: "The URL to navigate to", Required: true},
+		},
+		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			return b.Navigate(params)
+		},
+	)
+
+	// browser_screenshot
+	register(
+		"browser_screenshot",
+		"Take a screenshot of a web page, save it to a file, and return the file path",
+		[]ToolParam{
+			{Name: "url", Type: "string", Description: "The URL to screenshot", Required: true},
+			{Name: "selector", Type: "string", Description: "Optional CSS selector to screenshot a specific element", Required: false},
+		},
+		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			return b.Screenshot(params)
+		},
+	)
+
+	// browser_click
+	register(
+		"browser_click",
+		"Navigate to a URL and click an element by CSS selector",
+		[]ToolParam{
+			{Name: "url", Type: "string", Description: "The URL to navigate to", Required: true},
+			{Name: "selector", Type: "string", Description: "CSS selector of the element to click", Required: true},
+		},
+		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			return b.Click(params)
+		},
+	)
+
+	// browser_fill
+	register(
+		"browser_fill",
+		"Fill form fields on a page and optionally submit the form",
+		[]ToolParam{
+			{Name: "url", Type: "string", Description: "The URL with the form", Required: true},
+			{Name: "fields", Type: "object", Description: "Object mapping CSS selectors to values to fill", Required: true},
+			{Name: "submit", Type: "boolean", Description: "Whether to submit the form after filling", Required: false},
+		},
+		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			return b.Fill(params)
+		},
+	)
+
+	// browser_extract
+	register(
+		"browser_extract",
+		"Extract specific data from a page using CSS selectors",
+		[]ToolParam{
+			{Name: "url", Type: "string", Description: "The URL to extract data from", Required: true},
+			{Name: "selector", Type: "string", Description: "CSS selector to find elements", Required: true},
+			{Name: "attribute", Type: "string", Description: "Optional attribute to extract (e.g., 'href', 'src'). Default: text content", Required: false},
+		},
+		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			return b.Extract(params)
+		},
+	)
+
+	// browser_script
+	register(
+		"browser_script",
+		"Execute JavaScript on a page and return the result",
+		[]ToolParam{
+			{Name: "url", Type: "string", Description: "The URL to execute the script on", Required: true},
+			{Name: "script", Type: "string", Description: "JavaScript code to execute (use 'return' to return a value)", Required: true},
+		},
+		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			return b.Script(params)
+		},
+	)
 }

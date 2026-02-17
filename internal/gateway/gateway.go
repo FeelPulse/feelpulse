@@ -126,6 +126,9 @@ func (gw *Gateway) Start() error {
 	// Initialize browser automation
 	gw.initializeBrowser()
 
+	// Wire up command handler dependencies
+	gw.wireCommandHandler()
+
 	// Initialize heartbeat service
 	gw.initializeHeartbeat()
 
@@ -305,7 +308,54 @@ func (gw *Gateway) initializeBrowser() {
 	})
 
 	gw.browser = b
+
+	// Register browser tools with the tool registry
+	if gw.toolRegistry != nil {
+		gw.registerBrowserTools(b)
+	}
+
 	log.Printf("🌐 Browser automation enabled (headless=%v, stealth=%v)", cfg.Headless, cfg.Stealth)
+}
+
+// registerBrowserTools registers all browser tools with the tool registry
+func (gw *Gateway) registerBrowserTools(b *browser.Browser) {
+	b.RegisterTools(func(name, description string, params []browser.ToolParam, handler func(context.Context, map[string]interface{}) (string, error)) {
+		toolParams := make([]tools.Parameter, len(params))
+		for i, p := range params {
+			toolParams[i] = tools.Parameter{
+				Name:        p.Name,
+				Type:        p.Type,
+				Description: p.Description,
+				Required:    p.Required,
+			}
+		}
+
+		gw.toolRegistry.Register(&tools.Tool{
+			Name:        name,
+			Description: description,
+			Parameters:  toolParams,
+			Handler:     handler,
+		})
+	})
+
+	log.Printf("🔧 Registered %d browser tools", 6)
+}
+
+// wireCommandHandler wires up optional command handler dependencies
+func (gw *Gateway) wireCommandHandler() {
+	// Wire up browser for /browse command
+	if gw.browser != nil {
+		gw.commands.SetBrowser(gw.browser)
+	}
+
+	// Wire up compactor for /compact command
+	gw.mu.RLock()
+	compactor := gw.compactor
+	gw.mu.RUnlock()
+
+	if compactor != nil {
+		gw.commands.SetCompactor(compactor)
+	}
 }
 
 // GetBrowser returns the browser instance (for tool execution)
