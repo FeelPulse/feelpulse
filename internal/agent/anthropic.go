@@ -84,15 +84,23 @@ type AnthropicMessage struct {
 	Content interface{} `json:"content"` // string or []ContentBlock
 }
 
-// ContentBlock represents a content block in messages (for tool use/results)
+// ContentBlock represents a content block in messages (for tool use/results/images)
 type ContentBlock struct {
-	Type      string          `json:"type"`                  // "text", "tool_use", "tool_result"
+	Type      string          `json:"type"`                  // "text", "tool_use", "tool_result", "image"
 	Text      string          `json:"text,omitempty"`        // for type="text"
 	ID        string          `json:"id,omitempty"`          // for type="tool_use"
 	Name      string          `json:"name,omitempty"`        // for type="tool_use"
 	Input     json.RawMessage `json:"input,omitempty"`       // for type="tool_use"
 	ToolUseID string          `json:"tool_use_id,omitempty"` // for type="tool_result"
 	Content   string          `json:"content,omitempty"`     // for type="tool_result" (result text)
+	Source    *ImageSource    `json:"source,omitempty"`      // for type="image"
+}
+
+// ImageSource represents an image source for vision
+type ImageSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // "image/jpeg", "image/png", etc.
+	Data      string `json:"data"`       // base64-encoded image data
 }
 
 // AnthropicResponse represents the response from Claude API
@@ -184,14 +192,9 @@ func (c *AnthropicClient) AuthModeName() string {
 // DefaultSystemPrompt is the default system prompt for FeelPulse
 const DefaultSystemPrompt = "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful."
 
-// Chat sends messages to Claude and returns a response (uses default system prompt)
-func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, error) {
-	return c.ChatWithSystem(messages, "")
-}
-
-// ChatWithSystem sends messages to Claude with a custom system prompt
-func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt string) (*types.AgentResponse, error) {
-	// Convert our messages to Anthropic format
+// convertMessagesToAnthropic converts types.Message to AnthropicMessage format
+// Handles both text and image content
+func convertMessagesToAnthropic(messages []types.Message) []AnthropicMessage {
 	anthropicMsgs := make([]AnthropicMessage, 0, len(messages))
 
 	for _, msg := range messages {
@@ -200,11 +203,55 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 			role = "assistant"
 		}
 
+		// Check if message has image data
+		if msg.Metadata != nil {
+			if imageData, ok := msg.Metadata["image"].(map[string]string); ok {
+				data := imageData["data"]
+				mediaType := imageData["media_type"]
+				if data != "" && mediaType != "" {
+					// Create multi-part content with image and text
+					content := []ContentBlock{
+						{
+							Type: "image",
+							Source: &ImageSource{
+								Type:      "base64",
+								MediaType: mediaType,
+								Data:      data,
+							},
+						},
+						{
+							Type: "text",
+							Text: msg.Text,
+						},
+					}
+					anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
+						Role:    role,
+						Content: content,
+					})
+					continue
+				}
+			}
+		}
+
+		// Regular text message
 		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
 			Role:    role,
 			Content: msg.Text,
 		})
 	}
+
+	return anthropicMsgs
+}
+
+// Chat sends messages to Claude and returns a response (uses default system prompt)
+func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, error) {
+	return c.ChatWithSystem(messages, "")
+}
+
+// ChatWithSystem sends messages to Claude with a custom system prompt
+func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt string) (*types.AgentResponse, error) {
+	// Convert our messages to Anthropic format
+	anthropicMsgs := convertMessagesToAnthropic(messages)
 
 	// Use default system prompt if not provided
 	if systemPrompt == "" {
@@ -296,19 +343,7 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 // ChatStream sends messages to Claude with streaming and calls callback for each delta
 func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt string, callback StreamCallback) (*types.AgentResponse, error) {
 	// Convert our messages to Anthropic format
-	anthropicMsgs := make([]AnthropicMessage, 0, len(messages))
-
-	for _, msg := range messages {
-		role := "user"
-		if msg.IsBot {
-			role = "assistant"
-		}
-
-		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
-			Role:    role,
-			Content: msg.Text,
-		})
-	}
+	anthropicMsgs := convertMessagesToAnthropic(messages)
 
 	// Use default system prompt if not provided
 	if systemPrompt == "" {
@@ -459,17 +494,7 @@ func (c *AnthropicClient) ChatWithTools(
 	}
 
 	// Convert our messages to Anthropic format
-	anthropicMsgs := make([]AnthropicMessage, 0, len(messages))
-	for _, msg := range messages {
-		role := "user"
-		if msg.IsBot {
-			role = "assistant"
-		}
-		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
-			Role:    role,
-			Content: msg.Text,
-		})
-	}
+	anthropicMsgs := convertMessagesToAnthropic(messages)
 
 	// Use default system prompt if not provided
 	if systemPrompt == "" {

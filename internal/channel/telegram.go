@@ -3,6 +3,7 @@ package channel
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,6 +63,24 @@ type TelegramMessage struct {
 	Chat      *TelegramChat   `json:"chat"`
 	Date      int64           `json:"date"`
 	Text      string          `json:"text,omitempty"`
+	Caption   string          `json:"caption,omitempty"`
+	Photo     []TelegramPhoto `json:"photo,omitempty"` // Array of PhotoSize, largest last
+}
+
+// TelegramPhoto represents a photo size in Telegram
+type TelegramPhoto struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	FileSize     int    `json:"file_size,omitempty"`
+}
+
+// TelegramFile represents file info from getFile
+type TelegramFile struct {
+	FileID   string `json:"file_id"`
+	FilePath string `json:"file_path"`
+	FileSize int    `json:"file_size,omitempty"`
 }
 
 // TelegramUser represents a Telegram user
@@ -240,8 +259,15 @@ func (t *TelegramBot) poll(ctx context.Context) error {
 			t.offset = update.UpdateID + 1
 		}
 
-		if update.Message != nil && update.Message.Text != "" {
-			t.handleMessage(ctx, update.Message)
+		if update.Message != nil {
+			// Handle text messages
+			if update.Message.Text != "" {
+				t.handleMessage(ctx, update.Message)
+			}
+			// Handle photo messages
+			if len(update.Message.Photo) > 0 {
+				t.handlePhotoMessage(ctx, update.Message)
+			}
 		}
 
 		if update.CallbackQuery != nil {
@@ -300,6 +326,128 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	var reply *types.Message
 	var err error
+
+	// Use streaming handler if available
+	if t.streamingHandler != nil {
+		reply, err = t.handleMessageWithStreaming(ctx, tgMsg.Chat.ID, msg)
+	} else {
+		// Call regular handler
+		reply, err = t.handler(msg)
+	}
+
+	if err != nil {
+		log.Printf("❌ Handler error: %v", err)
+		return
+	}
+
+	// For streaming, the message was already sent/updated
+	if t.streamingHandler != nil {
+		return
+	}
+
+	if reply != nil && reply.Text != "" {
+		t.sendReply(tgMsg.Chat.ID, reply)
+	}
+}
+
+// handlePhotoMessage processes an incoming photo message
+func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMessage) {
+	if t.handler == nil && t.streamingHandler == nil {
+		return
+	}
+
+	// Get username for allowlist check
+	var username string
+	if tgMsg.From != nil {
+		username = tgMsg.From.Username
+	}
+
+	// Check allowlist before processing
+	if !t.IsUserAllowed(username) {
+		log.Printf("⛔ Blocked photo from unauthorized user: %s", username)
+		_ = t.SendMessage(tgMsg.Chat.ID, "⛔ You are not authorized to use this bot.", false)
+		return
+	}
+
+	// Get the largest photo (last in array)
+	if len(tgMsg.Photo) == 0 {
+		return
+	}
+	photo := tgMsg.Photo[len(tgMsg.Photo)-1]
+
+	// Check file size (max 5MB for safety)
+	if photo.FileSize > 5*1024*1024 {
+		log.Printf("⚠️ Photo too large: %d bytes", photo.FileSize)
+		_ = t.SendMessage(tgMsg.Chat.ID, "⚠️ Photo is too large. Please send a smaller image (max 5MB).", false)
+		return
+	}
+
+	// Get file info
+	fileInfo, err := t.GetFile(photo.FileID)
+	if err != nil {
+		log.Printf("❌ Failed to get file info: %v", err)
+		_ = t.SendMessage(tgMsg.Chat.ID, "❌ Failed to process photo.", false)
+		return
+	}
+
+	// Download the file
+	imageData, err := t.DownloadFile(fileInfo.FilePath)
+	if err != nil {
+		log.Printf("❌ Failed to download photo: %v", err)
+		_ = t.SendMessage(tgMsg.Chat.ID, "❌ Failed to download photo.", false)
+		return
+	}
+
+	// Determine media type from file path
+	mediaType := "image/jpeg"
+	if strings.HasSuffix(fileInfo.FilePath, ".png") {
+		mediaType = "image/png"
+	} else if strings.HasSuffix(fileInfo.FilePath, ".gif") {
+		mediaType = "image/gif"
+	} else if strings.HasSuffix(fileInfo.FilePath, ".webp") {
+		mediaType = "image/webp"
+	}
+
+	// Encode to base64
+	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
+
+	// Create message with image data
+	text := tgMsg.Caption
+	if text == "" {
+		text = "What do you see in this image?"
+	}
+
+	msg := &types.Message{
+		ID:        strconv.FormatInt(tgMsg.MessageID, 10),
+		Text:      text,
+		Channel:   "telegram",
+		Timestamp: time.Unix(tgMsg.Date, 0),
+		IsBot:     false,
+		Metadata: map[string]any{
+			"chat_id": tgMsg.Chat.ID,
+			"image": map[string]string{
+				"data":       imageBase64,
+				"media_type": mediaType,
+			},
+		},
+	}
+
+	if tgMsg.From != nil {
+		msg.From = tgMsg.From.Username
+		if msg.From == "" {
+			msg.From = tgMsg.From.FirstName
+		}
+		msg.Metadata["user_id"] = tgMsg.From.ID
+	}
+
+	log.Printf("📷 [%s] %s: [Photo] %s", msg.Channel, msg.From, text)
+
+	// Send typing indicator
+	if err := t.SendTypingAction(tgMsg.Chat.ID); err != nil {
+		log.Printf("⚠️ Failed to send typing action: %v", err)
+	}
+
+	var reply *types.Message
 
 	// Use streaming handler if available
 	if t.streamingHandler != nil {
@@ -629,6 +777,47 @@ func (t *TelegramBot) SendPhoto(chatID int64, path string, caption string) error
 	}
 
 	return nil
+}
+
+// GetFile retrieves file info from Telegram
+func (t *TelegramBot) GetFile(fileID string) (*TelegramFile, error) {
+	params := map[string]any{
+		"file_id": fileID,
+	}
+
+	resp, err := t.call("getFile", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var file TelegramFile
+	if err := json.Unmarshal(resp.Result, &file); err != nil {
+		return nil, fmt.Errorf("failed to parse file info: %w", err)
+	}
+
+	return &file, nil
+}
+
+// DownloadFile downloads a file from Telegram and returns its contents
+func (t *TelegramBot) DownloadFile(filePath string) ([]byte, error) {
+	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", t.token, filePath)
+
+	resp, err := t.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file data: %w", err)
+	}
+
+	return data, nil
 }
 
 // call makes an API call to Telegram
