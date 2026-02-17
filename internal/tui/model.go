@@ -91,6 +91,9 @@ type Model struct {
 	contextSize      int
 	lastUserMessage  string
 	tickCount        int
+
+	// Streaming channel for receiving messages from goroutines
+	msgCh chan tea.Msg
 }
 
 // responseMsg is sent when AI responds (streaming complete)
@@ -140,6 +143,7 @@ func New(cfg *config.Config) (*Model, error) {
 		currentModel: cfg.Agent.Model,
 		autocomplete: NewAutocomplete(),
 		contextSize:  defaultContextSize,
+		msgCh:        make(chan tea.Msg, 256),
 	}, nil
 }
 
@@ -279,17 +283,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.done {
-			// Streaming complete
-			m.streaming = false
+			// Streaming complete - wait for final responseMsg
 			m.responseTime = time.Since(m.responseStart)
-			return m, nil
+			return m, m.waitForMsg()
 		}
 
 		// Accumulate streaming text
 		m.streamText += msg.delta
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
-		return m, nil
+		// Keep listening for more stream messages
+		return m, m.waitForMsg()
 
 	case toolCallMsg:
 		if msg.active {
@@ -304,15 +308,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case responseMsg:
 		m.thinking = false
 		m.streaming = false
-		m.responseTime = time.Since(m.responseStart)
+		if m.responseTime == 0 {
+			m.responseTime = time.Since(m.responseStart)
+		}
 
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
+			// Use authoritative text from response for session storage
+			// (streamText was used for display during streaming)
+			responseText := msg.text
+			if responseText == "" && m.streamText != "" {
+				responseText = m.streamText
+			}
+
 			// Add AI response to messages
 			aiMsg := TimestampedMessage{
 				Message: types.Message{
-					Text:  msg.text,
+					Text:  responseText,
 					IsBot: true,
 				},
 				Timestamp: time.Now(),
@@ -455,44 +468,56 @@ func (m Model) sendToAIStream() tea.Cmd {
 		// Get all messages from session
 		messages := m.session.GetAllMessages()
 
-		// Create streaming callback that sends deltas to TUI
-		// Note: In real implementation, we'd use a channel to send
-		// deltas back to the bubbletea program. For now, we'll
-		// collect and send as a single response.
+		// Start AI call in a goroutine that sends deltas through the channel
+		go func() {
+			resp, err := m.agent.ProcessWithHistoryStream(messages, func(delta string) {
+				// Send each delta to the TUI via channel
+				m.msgCh <- streamMsg{delta: delta}
+			})
 
-		// Call the agent with streaming
-		resp, err := m.agent.ProcessWithHistoryStream(messages, func(delta string) {
-			// In a full implementation, we'd send this via a channel
-			// to the bubbletea program. For now, this accumulates in the agent.
-		})
-
-		if err != nil {
-			return responseMsg{err: err}
-		}
-
-		// Extract usage from metadata
-		var u types.Usage
-		if resp.Metadata != nil {
-			if in, ok := resp.Metadata["input_tokens"].(int); ok {
-				u.InputTokens = in
+			if err != nil {
+				m.msgCh <- responseMsg{err: err}
+				return
 			}
-			if out, ok := resp.Metadata["output_tokens"].(int); ok {
-				u.OutputTokens = out
-			}
-		}
 
-		model := m.currentModel
-		if resp.Metadata != nil {
-			if mdl, ok := resp.Metadata["model"].(string); ok {
-				model = mdl
-			}
-		}
+			// Signal streaming is done
+			m.msgCh <- streamMsg{done: true}
 
-		return responseMsg{
-			text:  resp.Text,
-			usage: u,
-			model: model,
-		}
+			// Extract usage from metadata
+			var u types.Usage
+			if resp.Metadata != nil {
+				if in, ok := resp.Metadata["input_tokens"].(int); ok {
+					u.InputTokens = in
+				}
+				if out, ok := resp.Metadata["output_tokens"].(int); ok {
+					u.OutputTokens = out
+				}
+			}
+
+			model := m.currentModel
+			if resp.Metadata != nil {
+				if mdl, ok := resp.Metadata["model"].(string); ok {
+					model = mdl
+				}
+			}
+
+			// Send final response with usage info
+			m.msgCh <- responseMsg{
+				text:  resp.Text,
+				usage: u,
+				model: model,
+			}
+		}()
+
+		// Return the first message from the channel
+		return <-m.msgCh
+	}
+}
+
+// waitForMsg returns a Cmd that waits for the next message from the stream channel
+func (m Model) waitForMsg() tea.Cmd {
+	return func() tea.Msg {
+		return <-m.msgCh
 	}
 }
 

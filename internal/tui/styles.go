@@ -8,17 +8,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Color palette
+// Color palette - Claude Code inspired (subdued blue-gray tones)
 var (
-	primaryColor   = lipgloss.Color("#FF6B9D") // Pink/magenta for FeelPulse branding
-	secondaryColor = lipgloss.Color("#7C3AED") // Purple accent
-	userColor      = lipgloss.Color("#3B82F6") // Blue for user messages
-	aiColor        = lipgloss.Color("#10B981") // Green for AI messages
-	dimColor       = lipgloss.Color("#6B7280") // Gray for help text
-	errorColor     = lipgloss.Color("#EF4444") // Red for errors
-	toolColor      = lipgloss.Color("#F59E0B") // Orange for tool calls
-	progressFg     = lipgloss.Color("#10B981") // Green for progress bar filled
-	progressBg     = lipgloss.Color("#374151") // Dark gray for progress bar empty
+	primaryColor   = lipgloss.Color("#5C6BC0") // Muted indigo for branding
+	secondaryColor = lipgloss.Color("#7986CB") // Lighter indigo accent
+	userColor      = lipgloss.Color("#90A4AE") // Blue-gray for user messages
+	aiColor        = lipgloss.Color("#81C784") // Soft green for AI messages
+	dimColor       = lipgloss.Color("#546E7A") // Subdued gray for help text
+	errorColor     = lipgloss.Color("#E57373") // Soft red for errors
+	toolColor      = lipgloss.Color("#FFB74D") // Soft orange for tool calls
+	progressFg     = lipgloss.Color("#546E7A") // Dim gray for progress bar filled
+	progressBg     = lipgloss.Color("#37474F") // Darker gray for progress bar empty
 )
 
 // Styles
@@ -26,14 +26,12 @@ var (
 	// Header bar style
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(primaryColor).
+			Foreground(lipgloss.Color("#B0BEC5")).
 			Padding(0, 1)
 
-	// Rich header box style
+	// Plain header style (no border, just a styled line)
 	headerBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryColor).
+			Foreground(dimColor).
 			Padding(0, 1)
 
 	// User message prefix
@@ -56,7 +54,7 @@ var (
 	// Input area border
 	inputBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(secondaryColor).
+				BorderForeground(dimColor).
 				Padding(0, 1)
 
 	// Help bar at bottom
@@ -109,12 +107,12 @@ var (
 
 	// Keyboard shortcut key style
 	keyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A78BFA")).
+			Foreground(lipgloss.Color("#78909C")).
 			Bold(true)
 
 	// Keyboard shortcut description style
 	keyDescStyle = lipgloss.NewStyle().
-			Foreground(dimColor)
+			Foreground(lipgloss.Color("#546E7A"))
 )
 
 // formatUserMessage formats a user message with styling
@@ -252,7 +250,7 @@ func formatProgressBar(used, total int, width int) string {
 	return fmt.Sprintf("Context: %s %s", bar, statsStyled)
 }
 
-// renderHeader creates the rich header box
+// renderHeader creates the plain header line (no border)
 func renderHeader(model string, responseTime time.Duration, width int) string {
 	// Format response time
 	timeStr := ""
@@ -265,22 +263,28 @@ func renderHeader(model string, responseTime time.Duration, width int) string {
 	}
 
 	// Build header content
-	parts := []string{"🫀 FeelPulse"}
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(primaryColor)
+	parts := []string{titleStyle.Render("FeelPulse")}
 	if model != "" {
 		// Shorten model name for display
 		shortModel := model
-		if len(model) > 20 {
-			shortModel = model[:17] + "..."
+		if len(model) > 25 {
+			shortModel = model[:22] + "..."
 		}
-		parts = append(parts, shortModel)
+		modelStyle := lipgloss.NewStyle().Foreground(dimColor)
+		parts = append(parts, modelStyle.Render(shortModel))
 	}
 	if timeStr != "" {
-		parts = append(parts, timeStr)
+		timeStyle := lipgloss.NewStyle().Foreground(dimColor).Italic(true)
+		parts = append(parts, timeStyle.Render(timeStr))
 	}
 
-	content := strings.Join(parts, "  │  ")
+	content := strings.Join(parts, "  ·  ")
 
-	return headerBoxStyle.Width(width - 4).Align(lipgloss.Center).Render(content)
+	// Add a subtle separator line
+	separator := lipgloss.NewStyle().Foreground(lipgloss.Color("#37474F")).Render(strings.Repeat("─", width-4))
+
+	return content + "\n" + separator
 }
 
 // formatKeyboardShortcuts returns the keyboard shortcuts help line
