@@ -950,12 +950,18 @@ func TestHandlerModelUnknown(t *testing.T) {
 		t.Fatalf("Handle error: %v", err)
 	}
 
-	// Should show error and mention available models
+	t.Logf("Result text: %s", result.Text)
+
+	// Should show error and list available models inline
 	if !strings.Contains(result.Text, "Unknown model") {
 		t.Errorf("Expected 'Unknown model' error, got: %s", result.Text)
 	}
-	if !strings.Contains(result.Text, "/models") {
-		t.Error("Should suggest using /models command")
+	if !strings.Contains(result.Text, "Available models") {
+		t.Errorf("Should list available models inline, got: %s", result.Text)
+	}
+	// Should list at least some models (check for "Sonnet" or "Claude" in display name)
+	if !strings.Contains(result.Text, "Sonnet") && !strings.Contains(result.Text, "Claude") {
+		t.Errorf("Should list model names, got: %s", result.Text)
 	}
 }
 
@@ -984,9 +990,19 @@ func TestHandlerProfileUseNoName(t *testing.T) {
 		t.Fatalf("Handle error: %v", err)
 	}
 
-	// Should show usage hint
+	// Should show usage hint with available profiles
 	if !strings.Contains(result.Text, "Usage") {
 		t.Errorf("Expected usage hint, got: %s", result.Text)
+	}
+	// Should list available profiles
+	if !strings.Contains(result.Text, "Available profiles") {
+		t.Errorf("Expected available profiles list, got: %s", result.Text)
+	}
+	if !strings.Contains(result.Text, "friendly") {
+		t.Error("Should list 'friendly' profile")
+	}
+	if !strings.Contains(result.Text, "formal") {
+		t.Error("Should list 'formal' profile")
 	}
 }
 

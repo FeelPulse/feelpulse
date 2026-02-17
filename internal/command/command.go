@@ -377,7 +377,15 @@ func (h *Handler) handleModel(ch, userID, args string) (string, any) {
 	// Validate and set new model
 	model := strings.TrimSpace(args)
 	if !session.ValidateModel(model) {
-		return fmt.Sprintf("❌ Unknown model: %s\n\nUse /models to see available options.", model), nil
+		// Show available models inline
+		models := session.SupportedModels()
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("❌ Unknown model: `%s`\n\n*Available models:*\n", model))
+		for _, m := range models {
+			sb.WriteString(fmt.Sprintf("  • %s\n", channel.FormatModelName(m)))
+		}
+		sb.WriteString("\nUse `/model <name>` to switch.")
+		return sb.String(), nil
 	}
 
 	sess.SetModel(model)
@@ -548,7 +556,17 @@ func (h *Handler) handleProfile(ch, userID, args string) string {
 
 	case "use", "set", "switch":
 		if len(parts) < 2 {
-			return "❌ Usage: `/profile use <name>`"
+			// Show available profiles in usage hint
+			profiles := h.cfg.Workspace.Profiles
+			if len(profiles) == 0 {
+				return "❌ Usage: `/profile use <name>`\n\nNo profiles configured. Add profiles to your config.yaml."
+			}
+			var sb strings.Builder
+			sb.WriteString("❌ Usage: `/profile use <name>`\n\n*Available profiles:*\n")
+			for name := range profiles {
+				sb.WriteString(fmt.Sprintf("  • `%s`\n", name))
+			}
+			return sb.String()
 		}
 		name := strings.TrimSpace(parts[1])
 
