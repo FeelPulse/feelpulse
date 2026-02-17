@@ -232,6 +232,12 @@ const DefaultSystemPrompt = `You are FeelPulse, a capable AI assistant with acce
   exec: clawhub install <skill-name> --workdir ~/.feelpulse/workspace
   then call read_skill to get its documentation.
 - Don't tell the user what you theoretically could do — just do it.
+
+## Working with files and repos
+- file_read, file_write, file_list are sandboxed to the workspace directory (~/.feelpulse/workspace).
+- Always clone git repos INTO the workspace: git clone <url> ~/.feelpulse/workspace/<repo-name>
+- Use file_list and file_read to explore cloned repos, not web_search.
+- Never guess or make up file contents — read the actual files.
 `
 
 // convertMessagesToAnthropic converts types.Message to AnthropicMessage format

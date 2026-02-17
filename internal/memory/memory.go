@@ -111,6 +111,9 @@ func (m *Manager) BuildSystemPrompt(defaultPrompt string) string {
 		parts = append(parts, "\n\n## Memory\n"+m.memory)
 	}
 
+	// Inject workspace path so bot knows where to clone repos
+	parts = append(parts, "\n\n## Workspace\nWorkspace path: "+m.path+"\nAll file operations (file_read, file_write, file_list) are sandboxed to this directory.\nAlways clone git repos here: git clone <url> "+m.path+"/<repo-name>")
+
 	// List available skills (loaded on demand via read_skill tool)
 	if len(m.skills) > 0 {
 		var lines []string

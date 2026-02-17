@@ -156,9 +156,12 @@ func TestManager_BuildSystemPrompt_Empty(t *testing.T) {
 	defaultPrompt := "Default prompt."
 	result := mgr.BuildSystemPrompt(defaultPrompt)
 
-	// With no workspace files, should just return default
-	if result != defaultPrompt {
-		t.Errorf("With no workspace files, should return default. Got: %q, want: %q", result, defaultPrompt)
+	// Should contain the default prompt and workspace path injection
+	if !strings.Contains(result, defaultPrompt) {
+		t.Errorf("Result should contain default prompt. Got: %q", result)
+	}
+	if !strings.Contains(result, "Workspace path:") {
+		t.Errorf("Result should contain workspace path. Got: %q", result)
 	}
 }
 
