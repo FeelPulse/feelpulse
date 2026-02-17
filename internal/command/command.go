@@ -1,6 +1,9 @@
 package command
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,22 +29,33 @@ type ContextCompactor interface {
 	ForceCompact(messages []types.Message) ([]types.Message, error)
 }
 
+// AdminProvider interface for admin commands
+type AdminProvider interface {
+	GetAdminUsername() string
+	GetSystemStats() map[string]any
+	GetAllSessions() []*session.Session
+	ReloadConfig(ctx context.Context) error
+}
+
 // Handler processes slash commands
 type Handler struct {
-	sessions  *session.Store
-	scheduler *scheduler.Scheduler
-	usage     *usage.Tracker
-	skills    *skills.Manager
-	cfg       *config.Config
-	browser   BrowserNavigator
-	compactor ContextCompactor
+	sessions       *session.Store
+	scheduler      *scheduler.Scheduler
+	usage          *usage.Tracker
+	skills         *skills.Manager
+	cfg            *config.Config
+	browser        BrowserNavigator
+	compactor      ContextCompactor
+	admin          AdminProvider
+	activeSession  map[string]string // userKey -> active session key
 }
 
 // NewHandler creates a new command handler
 func NewHandler(sessions *session.Store, cfg *config.Config) *Handler {
 	return &Handler{
-		sessions: sessions,
-		cfg:      cfg,
+		sessions:      sessions,
+		cfg:           cfg,
+		activeSession: make(map[string]string),
 	}
 }
 
@@ -68,6 +82,11 @@ func (h *Handler) SetBrowser(b BrowserNavigator) {
 // SetCompactor sets the compactor for /compact command
 func (h *Handler) SetCompactor(c ContextCompactor) {
 	h.compactor = c
+}
+
+// SetAdmin sets the admin provider for /admin commands
+func (h *Handler) SetAdmin(a AdminProvider) {
+	h.admin = a
 }
 
 // IsCommand checks if a message is a slash command
@@ -146,6 +165,14 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleBrowse(msg.Channel, userID, args)
 	case "compact":
 		response = h.handleCompact(msg.Channel, userID)
+	case "fork":
+		response = h.handleFork(msg.Channel, userID, args)
+	case "sessions":
+		response = h.handleSessions(msg.Channel, userID)
+	case "switch":
+		response = h.handleSwitch(msg.Channel, userID, args)
+	case "admin":
+		response = h.handleAdmin(msg.Channel, userID, msg.From, args)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -592,6 +619,195 @@ func (h *Handler) handleCancel(ch, userID, args string) string {
 	return fmt.Sprintf("❌ Reminder not found: `%s`\n\nUse `/reminders` to see active reminders.", args)
 }
 
+// handleFork creates a fork of the current conversation
+func (h *Handler) handleFork(ch, userID, args string) string {
+	args = strings.TrimSpace(args)
+
+	// Generate fork name if not provided
+	forkName := args
+	if forkName == "" {
+		b := make([]byte, 4)
+		rand.Read(b)
+		forkName = hex.EncodeToString(b)
+	}
+
+	// Validate fork name
+	if strings.ContainsAny(forkName, ":/ ") {
+		return "❌ Invalid fork name. Use alphanumeric characters only."
+	}
+
+	// Create fork
+	_, err := h.sessions.Fork(ch, userID, forkName)
+	if err != nil {
+		return fmt.Sprintf("❌ Failed to fork: %v", err)
+	}
+
+	// Track active session
+	userKey := session.SessionKey(ch, userID)
+	h.activeSession[userKey] = userKey + ":" + forkName
+
+	return fmt.Sprintf("🔀 *Conversation forked!*\n\nNew branch: `%s`\n\nYou're now on the forked conversation.\nUse `/switch main` to go back to the original.", forkName)
+}
+
+// handleSessions lists all sessions for the user
+func (h *Handler) handleSessions(ch, userID string) string {
+	entries := h.sessions.ListUserSessions(ch, userID)
+
+	if len(entries) == 0 {
+		return "📭 No sessions found."
+	}
+
+	// Determine active session
+	userKey := session.SessionKey(ch, userID)
+	activeKey := h.activeSession[userKey]
+	if activeKey == "" {
+		activeKey = userKey // Default is main
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📂 *Your Sessions* (%d)\n\n", len(entries)))
+
+	for _, entry := range entries {
+		active := ""
+		if entry.SessionID == activeKey {
+			active = " ✓"
+		}
+
+		timeAgo := formatTimeAgo(entry.UpdatedAt)
+		sb.WriteString(fmt.Sprintf("• `%s`%s — updated %s\n", entry.Name, active, timeAgo))
+	}
+
+	sb.WriteString("\n_Use `/switch <name>` to switch sessions._")
+	return sb.String()
+}
+
+// handleSwitch switches to a different session
+func (h *Handler) handleSwitch(ch, userID, args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "❌ Usage: `/switch <session-name>`\n\nUse `/sessions` to list available sessions."
+	}
+
+	_, err := h.sessions.SwitchSession(ch, userID, args)
+	if err != nil {
+		return fmt.Sprintf("❌ %v\n\nUse `/sessions` to see available sessions.", err)
+	}
+
+	// Update active session tracker
+	userKey := session.SessionKey(ch, userID)
+	if args == "main" {
+		h.activeSession[userKey] = userKey
+	} else {
+		h.activeSession[userKey] = userKey + ":" + args
+	}
+
+	return fmt.Sprintf("✅ Switched to session: *%s*", args)
+}
+
+// handleAdmin handles admin commands
+func (h *Handler) handleAdmin(ch, userID, username, args string) string {
+	if h.admin == nil {
+		return "❌ Admin commands are not available."
+	}
+
+	// Check if user is admin
+	adminUsername := h.admin.GetAdminUsername()
+	if adminUsername != "" && username != adminUsername {
+		return "❌ Access denied. Admin only."
+	}
+
+	// Parse subcommand
+	parts := strings.SplitN(strings.TrimSpace(args), " ", 2)
+	subcmd := strings.ToLower(parts[0])
+
+	switch subcmd {
+	case "stats":
+		return h.handleAdminStats()
+	case "sessions":
+		return h.handleAdminSessions()
+	case "reload":
+		return h.handleAdminReload()
+	case "":
+		return h.handleAdminHelp()
+	default:
+		return fmt.Sprintf("❓ Unknown admin command: %s\n\n%s", subcmd, h.handleAdminHelp())
+	}
+}
+
+// handleAdminStats returns system statistics
+func (h *Handler) handleAdminStats() string {
+	stats := h.admin.GetSystemStats()
+
+	var sb strings.Builder
+	sb.WriteString("📊 *System Statistics*\n\n")
+	sb.WriteString(fmt.Sprintf("⏱ Uptime: %v\n", stats["uptime"]))
+	sb.WriteString(fmt.Sprintf("🔄 Goroutines: %v\n", stats["goroutines"]))
+	sb.WriteString(fmt.Sprintf("💾 Memory: %v MB (alloc) / %v MB (sys)\n",
+		stats["memory_alloc_mb"], stats["memory_sys_mb"]))
+	sb.WriteString(fmt.Sprintf("📂 Sessions: %v\n", stats["sessions"]))
+	sb.WriteString(fmt.Sprintf("🔧 GC cycles: %v\n", stats["gc_cycles"]))
+
+	return sb.String()
+}
+
+// handleAdminSessions returns all active sessions
+func (h *Handler) handleAdminSessions() string {
+	sessions := h.admin.GetAllSessions()
+
+	if len(sessions) == 0 {
+		return "📭 No active sessions."
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📂 *All Sessions* (%d)\n\n", len(sessions)))
+
+	for i, sess := range sessions {
+		if i >= 20 {
+			sb.WriteString(fmt.Sprintf("\n... and %d more", len(sessions)-20))
+			break
+		}
+
+		timeAgo := formatTimeAgo(sess.UpdatedAt)
+		msgCount := sess.Len()
+		sb.WriteString(fmt.Sprintf("• `%s` — %d msgs, updated %s\n",
+			sess.Key, msgCount, timeAgo))
+	}
+
+	return sb.String()
+}
+
+// handleAdminReload reloads config and workspace files
+func (h *Handler) handleAdminReload() string {
+	if err := h.admin.ReloadConfig(context.Background()); err != nil {
+		return fmt.Sprintf("❌ Reload failed: %v", err)
+	}
+	return "✅ Configuration and workspace files reloaded."
+}
+
+// handleAdminHelp shows admin commands
+func (h *Handler) handleAdminHelp() string {
+	return `🔐 *Admin Commands*
+
+  /admin stats — System statistics
+  /admin sessions — All active sessions  
+  /admin reload — Reload config + workspace`
+}
+
+// formatTimeAgo returns a human-readable time ago string
+func formatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse — AI Chat Assistant*
@@ -602,6 +818,11 @@ func (h *Handler) handleHelp() string {
   /history [N] — Show recent messages (default 10)
   /export — Export conversation as .txt file
   /compact — Manually compress conversation history
+
+🔀 *Session Branching*
+  /fork [name] — Create a conversation fork
+  /sessions — List all your sessions
+  /switch <name> — Switch to a different session
 
 🤖 *AI Model*
   /model — Show or switch AI model
@@ -631,6 +852,9 @@ func (h *Handler) handleHelp() string {
 
 📊 *Stats*
   /usage — Show token usage & context
+
+🔐 *Admin*
+  /admin — Admin commands (restricted)
 
 ❓ *Help*
   /help — Show this message

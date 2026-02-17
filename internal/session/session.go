@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -380,6 +381,15 @@ var supportedModels = []string{
 	"claude-3-haiku-20240307",
 }
 
+// UserSessionEntry tracks a user's session
+type UserSessionEntry struct {
+	SessionID string    // Full session key
+	Name      string    // User-friendly name
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	IsActive  bool
+}
+
 // ValidateModel checks if a model name is supported
 func ValidateModel(model string) bool {
 	if model == "" {
@@ -457,4 +467,103 @@ func splitKey(key string) []string {
 		}
 	}
 	return []string{key}
+}
+
+// Fork creates a copy of the session with a new ID
+func (s *Store) Fork(channel, userID string, newSessionID string) (*Session, error) {
+	oldKey := SessionKey(channel, userID)
+	newKey := SessionKey(channel, userID) + ":" + newSessionID
+
+	s.mu.RLock()
+	oldSess, exists := s.sessions[oldKey]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	// Create a copy
+	oldSess.mu.Lock()
+	newMessages := make([]types.Message, len(oldSess.Messages))
+	copy(newMessages, oldSess.Messages)
+	model := oldSess.Model
+	profile := oldSess.Profile
+	ttsEnabled := oldSess.TTSEnabled
+	oldSess.mu.Unlock()
+
+	newSess := &Session{
+		Key:        newKey,
+		Messages:   newMessages,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		MaxHistory: DefaultMaxHistory,
+		Model:      model,
+		Profile:    profile,
+		TTSEnabled: ttsEnabled,
+	}
+
+	s.mu.Lock()
+	s.sessions[newKey] = newSess
+	s.mu.Unlock()
+
+	return newSess, nil
+}
+
+// ListUserSessions returns all sessions for a user on a channel
+func (s *Store) ListUserSessions(channel, userID string) []UserSessionEntry {
+	baseKey := SessionKey(channel, userID)
+	var entries []UserSessionEntry
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for key, sess := range s.sessions {
+		// Match base key or forked sessions (baseKey:forkID)
+		if key == baseKey || (len(key) > len(baseKey)+1 && key[:len(baseKey)+1] == baseKey+":") {
+			name := "main"
+			if key != baseKey {
+				// Extract fork name
+				name = key[len(baseKey)+1:]
+			}
+
+			entries = append(entries, UserSessionEntry{
+				SessionID: key,
+				Name:      name,
+				CreatedAt: sess.CreatedAt,
+				UpdatedAt: sess.UpdatedAt,
+				IsActive:  true, // For now all loaded sessions are active
+			})
+		}
+	}
+
+	return entries
+}
+
+// SwitchSession sets the active session for a user
+// Returns the new session or error if not found
+func (s *Store) SwitchSession(channel, userID, sessionName string) (*Session, error) {
+	var targetKey string
+	if sessionName == "main" || sessionName == "" {
+		targetKey = SessionKey(channel, userID)
+	} else {
+		targetKey = SessionKey(channel, userID) + ":" + sessionName
+	}
+
+	s.mu.RLock()
+	sess, exists := s.sessions[targetKey]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("session '%s' not found", sessionName)
+	}
+
+	return sess, nil
+}
+
+// GetSession retrieves a specific session by full key
+func (s *Store) GetSession(key string) (*Session, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, exists := s.sessions[key]
+	return sess, exists
 }

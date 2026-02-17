@@ -473,6 +473,9 @@ func (gw *Gateway) wireCommandHandler() {
 	if compactor != nil {
 		gw.commands.SetCompactor(compactor)
 	}
+
+	// Wire up admin provider for /admin commands
+	gw.commands.SetAdmin(gw)
 }
 
 // GetBrowser returns the browser instance (for tool execution)
