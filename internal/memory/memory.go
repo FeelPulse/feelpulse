@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"embed"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,13 @@ type Manager struct {
 	soul   string
 	user   string
 	memory string
+	skills []skillEntry // loaded skill docs
+}
+
+// skillEntry holds a loaded skill's name and content
+type skillEntry struct {
+	Name    string
+	Content string
 }
 
 // NewManager creates a new workspace Manager for the given path
@@ -40,6 +48,24 @@ func (m *Manager) Load() error {
 	// Read MEMORY.md (long-term memory)
 	if data, err := os.ReadFile(filepath.Join(m.path, memoryFile)); err == nil {
 		m.memory = string(data)
+	}
+
+	// Load skills from skills/ directory
+	m.skills = nil
+	skillsDir := filepath.Join(m.path, "skills")
+	if entries, err := os.ReadDir(skillsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillPath := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
+			if data, err := os.ReadFile(skillPath); err == nil {
+				m.skills = append(m.skills, skillEntry{
+					Name:    entry.Name(),
+					Content: string(data),
+				})
+			}
+		}
 	}
 
 	return nil
@@ -81,6 +107,15 @@ func (m *Manager) BuildSystemPrompt(defaultPrompt string) string {
 	// Append MEMORY.md as memory section
 	if m.memory != "" {
 		parts = append(parts, "\n\n## Memory\n"+m.memory)
+	}
+
+	// Append skills as reference documentation
+	if len(m.skills) > 0 {
+		var skillParts []string
+		for _, s := range m.skills {
+			skillParts = append(skillParts, "### Skill: "+s.Name+"\n"+s.Content)
+		}
+		parts = append(parts, "\n\n## Available Skills\n\nUse these skills via the exec tool when the relevant CLI is available.\n\n"+strings.Join(skillParts, "\n\n---\n\n"))
 	}
 
 	result := strings.Join(parts, "")
@@ -144,5 +179,50 @@ Example:
 		}
 	}
 
+	// Create skills directory with bundled skills
+	skillsDir := filepath.Join(workspacePath, "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		return err
+	}
+
+	// Install bundled skills (skip if already exists)
+	for name, content := range getBundledSkills() {
+		dir := filepath.Join(skillsDir, name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+		path := filepath.Join(dir, "SKILL.md")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
+}
+
+// bundledSkills contains built-in skills that ship with FeelPulse
+//
+//go:embed skills
+var skillsFS embed.FS
+
+// getBundledSkills reads embedded skill files
+func getBundledSkills() map[string]string {
+	result := make(map[string]string)
+	entries, err := skillsFS.ReadDir("skills")
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		data, err := skillsFS.ReadFile("skills/" + entry.Name() + "/SKILL.md")
+		if err != nil {
+			continue
+		}
+		result[entry.Name()] = string(data)
+	}
+	return result
 }
