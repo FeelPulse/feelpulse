@@ -9,6 +9,8 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -376,6 +378,79 @@ func (t *TelegramBot) SendDocument(chatID int64, filename string, content []byte
 	}
 	if _, err := part.Write(content); err != nil {
 		return fmt.Errorf("failed to write document: %w", err)
+	}
+
+	// Close writer
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	// Create request
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Send request
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Parse response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var tgResp TelegramResponse
+	if err := json.Unmarshal(respBody, &tgResp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !tgResp.OK {
+		return fmt.Errorf("telegram API error: %s (code: %d)", tgResp.Description, tgResp.ErrorCode)
+	}
+
+	return nil
+}
+
+// SendPhoto sends a photo to a chat
+func (t *TelegramBot) SendPhoto(chatID int64, path string, caption string) error {
+	url := t.baseURL + "/sendPhoto"
+
+	// Open the file
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open photo: %w", err)
+	}
+	defer file.Close()
+
+	// Create multipart form
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Add chat_id field
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return fmt.Errorf("failed to write chat_id: %w", err)
+	}
+
+	// Add caption if provided
+	if caption != "" {
+		if err := writer.WriteField("caption", caption); err != nil {
+			return fmt.Errorf("failed to write caption: %w", err)
+		}
+	}
+
+	// Add photo file
+	part, err := writer.CreateFormFile("photo", filepath.Base(path))
+	if err != nil {
+		return fmt.Errorf("failed to create form file: %w", err)
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return fmt.Errorf("failed to copy photo: %w", err)
 	}
 
 	// Close writer

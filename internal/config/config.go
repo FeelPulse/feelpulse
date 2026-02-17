@@ -16,6 +16,7 @@ type Config struct {
 	Workspace WorkspaceConfig `yaml:"workspace"`
 	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
 	TTS       TTSConfig       `yaml:"tts"`
+	Browser   BrowserConfig   `yaml:"browser"`
 }
 
 type HeartbeatConfig struct {
@@ -26,6 +27,13 @@ type HeartbeatConfig struct {
 type TTSConfig struct {
 	Enabled bool   `yaml:"enabled"` // Enable TTS globally (default: false)
 	Command string `yaml:"command"` // TTS command (espeak, say, etc.) - auto-detected if empty
+}
+
+type BrowserConfig struct {
+	Enabled        bool `yaml:"enabled"`        // Enable browser tools (default: false)
+	Headless       bool `yaml:"headless"`       // Run without visible window (default: true)
+	TimeoutSeconds int  `yaml:"timeoutSeconds"` // Page load timeout in seconds (default: 30)
+	Stealth        bool `yaml:"stealth"`        // Use stealth mode to avoid bot detection (default: true)
 }
 
 type WorkspaceConfig struct {
@@ -105,6 +113,12 @@ func Default() *Config {
 		TTS: TTSConfig{
 			Enabled: false,
 			Command: "", // Auto-detect
+		},
+		Browser: BrowserConfig{
+			Enabled:        false, // Disabled by default (requires Chrome)
+			Headless:       true,
+			TimeoutSeconds: 30,
+			Stealth:        true,
 		},
 	}
 }

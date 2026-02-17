@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/agent"
+	"github.com/FeelPulse/feelpulse/internal/browser"
 	"github.com/FeelPulse/feelpulse/internal/channel"
 	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
@@ -43,6 +44,7 @@ type Gateway struct {
 	watcher   *watcher.ConfigWatcher
 	heartbeat *heartbeat.Service
 	usage     *usage.Tracker
+	browser   *browser.Browser
 	startTime time.Time
 	cancelCtx context.CancelFunc
 	mu        sync.RWMutex // protects router, telegram, compactor during hot reload
@@ -114,6 +116,9 @@ func (gw *Gateway) Start() error {
 	gw.initializeAgent(ctx)
 	gw.initializeTelegram(ctx)
 
+	// Initialize browser automation
+	gw.initializeBrowser()
+
 	// Initialize heartbeat service
 	gw.initializeHeartbeat()
 
@@ -139,6 +144,9 @@ func (gw *Gateway) Start() error {
 		}
 		if gw.heartbeat != nil {
 			gw.heartbeat.Stop()
+		}
+		if gw.browser != nil {
+			gw.browser.Close()
 		}
 		gw.mu.RLock()
 		telegram := gw.telegram
@@ -248,6 +256,42 @@ func (gw *Gateway) initializeHeartbeat() {
 	})
 
 	gw.heartbeat.Start()
+}
+
+// initializeBrowser sets up the browser automation tools
+func (gw *Gateway) initializeBrowser() {
+	if !gw.cfg.Browser.Enabled {
+		return
+	}
+
+	cfg := &browser.Config{
+		Enabled:        gw.cfg.Browser.Enabled,
+		Headless:       gw.cfg.Browser.Headless,
+		TimeoutSeconds: gw.cfg.Browser.TimeoutSeconds,
+		Stealth:        gw.cfg.Browser.Stealth,
+	}
+
+	b, err := browser.New(cfg)
+	if err != nil {
+		log.Printf("⚠️  Browser tools disabled: %v", err)
+		return
+	}
+
+	// Set screenshot callback to send to Telegram
+	b.SetScreenshotCallback(func(path string) error {
+		// This callback is called when a screenshot is taken
+		// We'll handle sending in the message handler based on context
+		log.Printf("📸 Screenshot saved: %s", path)
+		return nil
+	})
+
+	gw.browser = b
+	log.Printf("🌐 Browser automation enabled (headless=%v, stealth=%v)", cfg.Headless, cfg.Stealth)
+}
+
+// GetBrowser returns the browser instance (for tool execution)
+func (gw *Gateway) GetBrowser() *browser.Browser {
+	return gw.browser
 }
 
 // handleTelegramCallback processes inline keyboard button presses
