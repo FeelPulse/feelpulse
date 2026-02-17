@@ -137,3 +137,80 @@ func DefaultDBPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".feelpulse", "sessions.db")
 }
+
+// === Reminder Persistence ===
+
+// ReminderData represents a reminder for storage
+type ReminderData struct {
+	ID       string    `json:"id"`
+	Channel  string    `json:"channel"`
+	UserID   string    `json:"user_id"`
+	Message  string    `json:"message"`
+	FireAt   time.Time `json:"fire_at"`
+	Created  time.Time `json:"created"`
+}
+
+// EnsureRemindersTable creates the reminders table if it doesn't exist
+func (s *SQLiteStore) EnsureRemindersTable() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS reminders (
+			id TEXT PRIMARY KEY,
+			channel TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			message TEXT NOT NULL,
+			fire_at INTEGER NOT NULL,
+			created INTEGER NOT NULL
+		)
+	`)
+	return err
+}
+
+// SaveReminder persists a reminder to the database
+func (s *SQLiteStore) SaveReminder(r *ReminderData) error {
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO reminders (id, channel, user_id, message, fire_at, created)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, r.ID, r.Channel, r.UserID, r.Message, r.FireAt.Unix(), r.Created.Unix())
+	return err
+}
+
+// DeleteReminder removes a reminder from the database
+func (s *SQLiteStore) DeleteReminder(id string) error {
+	_, err := s.db.Exec(`DELETE FROM reminders WHERE id = ?`, id)
+	return err
+}
+
+// LoadReminders retrieves all reminders from the database
+func (s *SQLiteStore) LoadReminders() ([]*ReminderData, error) {
+	rows, err := s.db.Query(`
+		SELECT id, channel, user_id, message, fire_at, created 
+		FROM reminders 
+		ORDER BY fire_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reminders []*ReminderData
+	for rows.Next() {
+		var r ReminderData
+		var fireAtUnix, createdUnix int64
+		if err := rows.Scan(&r.ID, &r.Channel, &r.UserID, &r.Message, &fireAtUnix, &createdUnix); err != nil {
+			return nil, err
+		}
+		r.FireAt = time.Unix(fireAtUnix, 0)
+		r.Created = time.Unix(createdUnix, 0)
+		reminders = append(reminders, &r)
+	}
+	return reminders, rows.Err()
+}
+
+// CleanExpiredReminders removes reminders that have already fired
+func (s *SQLiteStore) CleanExpiredReminders() (int64, error) {
+	result, err := s.db.Exec(`DELETE FROM reminders WHERE fire_at < ?`, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

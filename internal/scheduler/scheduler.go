@@ -37,10 +37,28 @@ func (r *Reminder) String() string {
 // ReminderHandler is called when a reminder fires
 type ReminderHandler func(r *Reminder)
 
+// ReminderPersister handles reminder persistence
+type ReminderPersister interface {
+	SaveReminder(r *ReminderData) error
+	DeleteReminder(id string) error
+	LoadReminders() ([]*ReminderData, error)
+}
+
+// ReminderData represents a reminder for storage
+type ReminderData struct {
+	ID       string
+	Channel  string
+	UserID   string
+	Message  string
+	FireAt   time.Time
+	Created  time.Time
+}
+
 // Scheduler manages reminders
 type Scheduler struct {
 	reminders    map[string]*Reminder
 	handler      ReminderHandler
+	persister    ReminderPersister
 	mu           sync.RWMutex
 	running      bool
 	stopCh       chan struct{}
@@ -70,6 +88,47 @@ func (s *Scheduler) SetHandler(h ReminderHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handler = h
+}
+
+// SetPersister sets the persistence backend and loads existing reminders
+func (s *Scheduler) SetPersister(p ReminderPersister) error {
+	s.mu.Lock()
+	s.persister = p
+	s.mu.Unlock()
+
+	// Load existing reminders
+	reminders, err := p.LoadReminders()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	loaded := 0
+	for _, r := range reminders {
+		// Skip expired reminders
+		if r.FireAt.Before(now) {
+			_ = p.DeleteReminder(r.ID)
+			continue
+		}
+
+		s.mu.Lock()
+		s.reminders[r.ID] = &Reminder{
+			ID:      r.ID,
+			Channel: r.Channel,
+			UserID:  r.UserID,
+			Message: r.Message,
+			FireAt:  r.FireAt,
+			Created: r.Created,
+		}
+		s.mu.Unlock()
+		loaded++
+	}
+
+	if loaded > 0 {
+		fmt.Printf("⏰ Loaded %d reminders from database\n", loaded)
+	}
+
+	return nil
 }
 
 // Start begins the scheduler loop
@@ -116,18 +175,30 @@ func (s *Scheduler) loop() {
 // checkDue fires any due reminders
 func (s *Scheduler) checkDue(now time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	persister := s.persister
+	var toFire []*Reminder
+	var toDelete []string
 
 	for id, r := range s.reminders {
 		if now.After(r.FireAt) || now.Equal(r.FireAt) {
-			// Fire the reminder
-			if s.handler != nil {
-				// Call handler outside of lock to avoid deadlock
-				reminder := r
-				go s.handler(reminder)
-			}
-			// Remove the reminder
+			toFire = append(toFire, r)
+			toDelete = append(toDelete, id)
 			delete(s.reminders, id)
+		}
+	}
+	handler := s.handler
+	s.mu.Unlock()
+
+	// Fire reminders and delete from persistence outside lock
+	for _, r := range toFire {
+		if handler != nil {
+			go handler(r)
+		}
+	}
+
+	if persister != nil {
+		for _, id := range toDelete {
+			_ = persister.DeleteReminder(id)
 		}
 	}
 }
@@ -142,32 +213,53 @@ func (s *Scheduler) AddReminder(channel, userID string, in time.Duration, messag
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	persister := s.persister
+	s.mu.Unlock()
 
 	id := uuid.New().String()
+	now := time.Now()
 	r := &Reminder{
 		ID:      id,
 		Channel: channel,
 		UserID:  userID,
 		Message: message,
-		FireAt:  time.Now().Add(in),
-		Created: time.Now(),
+		FireAt:  now.Add(in),
+		Created: now,
 	}
 
+	s.mu.Lock()
 	s.reminders[id] = r
+	s.mu.Unlock()
+
+	// Persist if available
+	if persister != nil {
+		_ = persister.SaveReminder(&ReminderData{
+			ID:      r.ID,
+			Channel: r.Channel,
+			UserID:  r.UserID,
+			Message: r.Message,
+			FireAt:  r.FireAt,
+			Created: r.Created,
+		})
+	}
+
 	return id, nil
 }
 
 // Cancel removes a reminder by ID
 func (s *Scheduler) Cancel(id string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.reminders[id]; exists {
+	_, exists := s.reminders[id]
+	persister := s.persister
+	if exists {
 		delete(s.reminders, id)
-		return true
 	}
-	return false
+	s.mu.Unlock()
+
+	if exists && persister != nil {
+		_ = persister.DeleteReminder(id)
+	}
+	return exists
 }
 
 // List returns all reminders for a user on a channel
@@ -217,31 +309,90 @@ func ParseDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// ParseRemindCommand parses "in <duration> <message>" format
+// ParseRemindCommand parses "in <duration> <message>" or "at <time> <message>" format
 func ParseRemindCommand(args string) (durationStr, message string, err error) {
 	args = strings.TrimSpace(args)
 
 	// Match: "in <duration> <message>"
-	re := regexp.MustCompile(`^in\s+(\S+)\s+(.+)$`)
-	matches := re.FindStringSubmatch(args)
+	reIn := regexp.MustCompile(`^in\s+(\S+)\s+(.+)$`)
+	if matches := reIn.FindStringSubmatch(args); len(matches) == 3 {
+		durationStr = matches[1]
+		message = strings.TrimSpace(matches[2])
 
-	if len(matches) != 3 {
-		return "", "", fmt.Errorf("invalid format: use 'in <duration> <message>'")
+		// Validate duration
+		if _, err := ParseDuration(durationStr); err != nil {
+			return "", "", fmt.Errorf("invalid duration: %s", durationStr)
+		}
+
+		if message == "" {
+			return "", "", fmt.Errorf("message cannot be empty")
+		}
+
+		return durationStr, message, nil
 	}
 
-	durationStr = matches[1]
-	message = strings.TrimSpace(matches[2])
+	// Match: "at <HH:MM> <message>" or "at <HH:MM:SS> <message>"
+	reAt := regexp.MustCompile(`^at\s+(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$`)
+	if matches := reAt.FindStringSubmatch(args); len(matches) == 3 {
+		timeStr := matches[1]
+		message = strings.TrimSpace(matches[2])
 
-	// Validate duration
-	if _, err := ParseDuration(durationStr); err != nil {
-		return "", "", fmt.Errorf("invalid duration: %s", durationStr)
+		// Parse the time and convert to duration
+		dur, err := ParseAbsoluteTime(timeStr)
+		if err != nil {
+			return "", "", err
+		}
+
+		// Return as duration string (in seconds)
+		durationStr = fmt.Sprintf("%ds", int(dur.Seconds()))
+
+		if message == "" {
+			return "", "", fmt.Errorf("message cannot be empty")
+		}
+
+		return durationStr, message, nil
 	}
 
-	if message == "" {
-		return "", "", fmt.Errorf("message cannot be empty")
+	return "", "", fmt.Errorf("invalid format: use 'in <duration> <message>' or 'at <HH:MM> <message>'")
+}
+
+// ParseAbsoluteTime parses a time like "14:00" or "14:30:00" and returns duration until that time
+func ParseAbsoluteTime(timeStr string) (time.Duration, error) {
+	now := time.Now()
+
+	// Try parsing HH:MM:SS
+	parts := strings.Split(timeStr, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, fmt.Errorf("invalid time format: %s (use HH:MM or HH:MM:SS)", timeStr)
 	}
 
-	return durationStr, message, nil
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, fmt.Errorf("invalid hour: %s", parts[0])
+	}
+
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil || minute < 0 || minute > 59 {
+		return 0, fmt.Errorf("invalid minute: %s", parts[1])
+	}
+
+	second := 0
+	if len(parts) == 3 {
+		second, err = strconv.Atoi(parts[2])
+		if err != nil || second < 0 || second > 59 {
+			return 0, fmt.Errorf("invalid second: %s", parts[2])
+		}
+	}
+
+	// Create target time today
+	target := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, second, 0, now.Location())
+
+	// If target is in the past, schedule for tomorrow
+	if target.Before(now) || target.Equal(now) {
+		target = target.Add(24 * time.Hour)
+	}
+
+	return target.Sub(now), nil
 }
 
 // formatDuration formats a duration in human-readable form

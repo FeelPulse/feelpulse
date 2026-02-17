@@ -29,6 +29,8 @@ type Session struct {
 	UpdatedAt  time.Time
 	MaxHistory int
 	Model      string // Per-session model override
+	TTSEnabled *bool  // Per-session TTS toggle (nil = use global config)
+	Profile    string // Per-session personality profile name
 	mu         sync.Mutex
 }
 
@@ -277,6 +279,40 @@ func (sess *Session) GetModel() string {
 	defer sess.mu.Unlock()
 
 	return sess.Model
+}
+
+// SetTTS sets the per-session TTS preference
+func (sess *Session) SetTTS(enabled bool) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	sess.TTSEnabled = &enabled
+	sess.UpdatedAt = time.Now()
+}
+
+// GetTTS returns the session's TTS preference (nil = use global)
+func (sess *Session) GetTTS() *bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	return sess.TTSEnabled
+}
+
+// SetProfile sets the per-session personality profile
+func (sess *Session) SetProfile(profile string) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	sess.Profile = profile
+	sess.UpdatedAt = time.Now()
+}
+
+// GetProfile returns the session's active profile (empty = default)
+func (sess *Session) GetProfile() string {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	return sess.Profile
 }
 
 // Len returns the number of messages in the session

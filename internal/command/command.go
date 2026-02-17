@@ -103,6 +103,8 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleRemind(msg.Channel, userID, args)
 	case "reminders":
 		response = h.handleReminders(msg.Channel, userID)
+	case "cancel":
+		response = h.handleCancel(msg.Channel, userID, args)
 	case "usage", "stats":
 		response = h.handleUsage(msg.Channel, userID)
 	case "model":
@@ -111,6 +113,10 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response, keyboard = h.handleModels()
 	case "skills":
 		response = h.handleSkills()
+	case "tts":
+		response = h.handleTTS(msg.Channel, userID, args)
+	case "profile":
+		response = h.handleProfile(msg.Channel, userID, args)
 	case "export":
 		return h.handleExport(msg.Channel, userID, msg)
 	case "help", "start":
@@ -370,6 +376,123 @@ func FormatExport(messages []types.Message) string {
 	return sb.String()
 }
 
+// handleTTS toggles text-to-speech for the session
+func (h *Handler) handleTTS(ch, userID, args string) string {
+	sess := h.sessions.GetOrCreate(ch, userID)
+	args = strings.ToLower(strings.TrimSpace(args))
+
+	switch args {
+	case "on", "enable", "true", "1":
+		sess.SetTTS(true)
+		return "🔊 *TTS Enabled*\n\nBot responses will now be spoken aloud."
+	case "off", "disable", "false", "0":
+		sess.SetTTS(false)
+		return "🔇 *TTS Disabled*\n\nBot responses will be text-only."
+	case "":
+		// Show current status
+		tts := sess.GetTTS()
+		if tts == nil {
+			return "🔊 *TTS Status:* using global config\n\nUse `/tts on` or `/tts off` to toggle."
+		}
+		if *tts {
+			return "🔊 *TTS Status:* enabled\n\nUse `/tts off` to disable."
+		}
+		return "🔇 *TTS Status:* disabled\n\nUse `/tts on` to enable."
+	default:
+		return "❌ Invalid option. Use `/tts on` or `/tts off`."
+	}
+}
+
+// handleProfile manages personality profiles
+func (h *Handler) handleProfile(ch, userID, args string) string {
+	sess := h.sessions.GetOrCreate(ch, userID)
+	args = strings.TrimSpace(args)
+
+	// Parse subcommand
+	parts := strings.SplitN(args, " ", 2)
+	subcmd := strings.ToLower(parts[0])
+
+	switch subcmd {
+	case "list":
+		profiles := h.cfg.Workspace.Profiles
+		if len(profiles) == 0 {
+			return "📭 No profiles configured.\n\nAdd profiles to your config:\n```yaml\nworkspace:\n  profiles:\n    friendly: /path/to/friendly-soul.md\n    formal: /path/to/formal-soul.md\n```"
+		}
+
+		var sb strings.Builder
+		sb.WriteString("🎭 *Available Profiles*\n\n")
+		current := sess.GetProfile()
+		for name := range profiles {
+			marker := ""
+			if name == current {
+				marker = " ✓"
+			}
+			sb.WriteString(fmt.Sprintf("• `%s`%s\n", name, marker))
+		}
+		sb.WriteString("\nUse `/profile use <name>` to switch.")
+		return sb.String()
+
+	case "use", "set", "switch":
+		if len(parts) < 2 {
+			return "❌ Usage: `/profile use <name>`"
+		}
+		name := strings.TrimSpace(parts[1])
+
+		// Check if profile exists
+		profiles := h.cfg.Workspace.Profiles
+		if _, ok := profiles[name]; !ok {
+			return fmt.Sprintf("❌ Unknown profile: `%s`\n\nUse `/profile list` to see available profiles.", name)
+		}
+
+		sess.SetProfile(name)
+		return fmt.Sprintf("✅ Switched to profile: *%s*", name)
+
+	case "reset", "clear", "default":
+		sess.SetProfile("")
+		return "✅ Reset to default profile."
+
+	case "":
+		// Show current profile
+		current := sess.GetProfile()
+		if current == "" {
+			return "🎭 *Current Profile:* default\n\nUse `/profile list` to see available profiles."
+		}
+		return fmt.Sprintf("🎭 *Current Profile:* %s\n\nUse `/profile list` to see all profiles.", current)
+
+	default:
+		return "❓ Unknown subcommand. Use:\n• `/profile list` — show available profiles\n• `/profile use <name>` — switch to a profile\n• `/profile reset` — reset to default"
+	}
+}
+
+// handleCancel cancels a reminder by ID
+func (h *Handler) handleCancel(ch, userID, args string) string {
+	if h.scheduler == nil {
+		return "❌ Reminders are not enabled."
+	}
+
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "❌ Usage: `/cancel <id>`\n\nUse `/reminders` to see reminder IDs."
+	}
+
+	// Try to find and cancel the reminder
+	reminders := h.scheduler.List(ch, userID)
+	for _, r := range reminders {
+		// Match by full ID or prefix
+		if r.ID == args || strings.HasPrefix(r.ID, args) {
+			if h.scheduler.Cancel(r.ID) {
+				shortID := r.ID
+				if len(shortID) > 8 {
+					shortID = shortID[:8]
+				}
+				return fmt.Sprintf("✅ Cancelled reminder: [%s] %s", shortID, r.Message)
+			}
+		}
+	}
+
+	return fmt.Sprintf("❌ Reminder not found: `%s`\n\nUse `/reminders` to see active reminders.", args)
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse — AI Chat Assistant*
@@ -383,12 +506,23 @@ func (h *Handler) handleHelp() string {
   /model — Show or switch AI model
   /models — List available models
 
+🎭 *Personality*
+  /profile — Show current profile
+  /profile list — List available profiles
+  /profile use <name> — Switch profile
+
+🔊 *Voice*
+  /tts on — Enable text-to-speech
+  /tts off — Disable text-to-speech
+
 🛠️ *Skills*
   /skills — List loaded AI tools
 
 ⏰ *Reminders*
   /remind in <time> <msg> — Set reminder
+  /remind at <HH:MM> <msg> — Set reminder at time
   /reminders — List active reminders
+  /cancel <id> — Cancel a reminder
 
 📊 *Stats*
   /usage — Show token usage

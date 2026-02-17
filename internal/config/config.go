@@ -15,6 +15,7 @@ type Config struct {
 	Hooks     HooksConfig     `yaml:"hooks"`
 	Workspace WorkspaceConfig `yaml:"workspace"`
 	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
+	TTS       TTSConfig       `yaml:"tts"`
 }
 
 type HeartbeatConfig struct {
@@ -22,8 +23,14 @@ type HeartbeatConfig struct {
 	IntervalMinutes int  `yaml:"intervalMinutes"`
 }
 
+type TTSConfig struct {
+	Enabled bool   `yaml:"enabled"` // Enable TTS globally (default: false)
+	Command string `yaml:"command"` // TTS command (espeak, say, etc.) - auto-detected if empty
+}
+
 type WorkspaceConfig struct {
-	Path string `yaml:"path"`
+	Path     string            `yaml:"path"`
+	Profiles map[string]string `yaml:"profiles"` // Map of profile name -> path to SOUL.md variant
 }
 
 type GatewayConfig struct {
@@ -94,6 +101,10 @@ func Default() *Config {
 		Heartbeat: HeartbeatConfig{
 			Enabled:         false,
 			IntervalMinutes: 60,
+		},
+		TTS: TTSConfig{
+			Enabled: false,
+			Command: "", // Auto-detect
 		},
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/internal/usage"
@@ -463,6 +464,267 @@ func TestFormatExport(t *testing.T) {
 	if !strings.Contains(export, "# Messages: 2") {
 		t.Error("Export should include message count")
 	}
+}
+
+func TestHandlerTTS(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	tests := []struct {
+		name     string
+		args     string
+		wantTTS  *bool
+		wantText string
+	}{
+		{"enable", "on", boolPtr(true), "TTS Enabled"},
+		{"disable", "off", boolPtr(false), "TTS Disabled"},
+		{"status on", "", nil, "TTS Status"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &types.Message{
+				Text:    "/tts " + tt.args,
+				Channel: "telegram",
+				Metadata: map[string]any{
+					"user_id": "user123",
+				},
+			}
+
+			result, err := handler.Handle(msg)
+			if err != nil {
+				t.Fatalf("Handle error: %v", err)
+			}
+
+			if !strings.Contains(result.Text, tt.wantText) {
+				t.Errorf("Expected %q in response, got: %s", tt.wantText, result.Text)
+			}
+
+			// Check session state
+			sess, _ := store.Get("telegram", "user123")
+			if sess != nil && tt.wantTTS != nil {
+				got := sess.GetTTS()
+				if got == nil || *got != *tt.wantTTS {
+					t.Errorf("TTS state = %v, want %v", got, *tt.wantTTS)
+				}
+			}
+		})
+	}
+}
+
+func TestHandlerProfile(t *testing.T) {
+	store := session.NewStore()
+	cfg := &config.Config{
+		Workspace: config.WorkspaceConfig{
+			Profiles: map[string]string{
+				"friendly": "/path/to/friendly.md",
+				"formal":   "/path/to/formal.md",
+			},
+		},
+	}
+	handler := NewHandler(store, cfg)
+
+	t.Run("list", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/profile list",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "friendly") {
+			t.Error("List should contain 'friendly' profile")
+		}
+		if !strings.Contains(result.Text, "formal") {
+			t.Error("List should contain 'formal' profile")
+		}
+	})
+
+	t.Run("use", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/profile use friendly",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Switched") {
+			t.Errorf("Expected switch confirmation, got: %s", result.Text)
+		}
+
+		sess, _ := store.Get("telegram", "user123")
+		if sess.GetProfile() != "friendly" {
+			t.Errorf("Profile = %q, want 'friendly'", sess.GetProfile())
+		}
+	})
+
+	t.Run("use unknown", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/profile use unknown",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user456",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Unknown profile") {
+			t.Errorf("Expected error for unknown profile, got: %s", result.Text)
+		}
+	})
+
+	t.Run("reset", func(t *testing.T) {
+		// First set a profile
+		sess := store.GetOrCreate("telegram", "user789")
+		sess.SetProfile("friendly")
+
+		msg := &types.Message{
+			Text:    "/profile reset",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user789",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Reset") {
+			t.Errorf("Expected reset confirmation, got: %s", result.Text)
+		}
+
+		if sess.GetProfile() != "" {
+			t.Errorf("Profile = %q, want empty", sess.GetProfile())
+		}
+	})
+}
+
+func TestHandlerCancel(t *testing.T) {
+	store := session.NewStore()
+	sched := scheduler.New()
+	defer sched.Stop()
+
+	handler := NewHandler(store, nil)
+	handler.SetScheduler(sched)
+
+	// Add a reminder
+	id, _ := sched.AddReminder("telegram", "user123", 1*time.Hour, "Test reminder")
+	shortID := id[:8]
+
+	t.Run("cancel by short id", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/cancel " + shortID,
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Cancelled") {
+			t.Errorf("Expected cancellation, got: %s", result.Text)
+		}
+
+		reminders := sched.List("telegram", "user123")
+		if len(reminders) != 0 {
+			t.Error("Reminder should be cancelled")
+		}
+	})
+
+	t.Run("cancel unknown", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/cancel unknown",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "not found") {
+			t.Errorf("Expected not found error, got: %s", result.Text)
+		}
+	})
+
+	t.Run("cancel no args", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/cancel",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Usage") {
+			t.Errorf("Expected usage help, got: %s", result.Text)
+		}
+	})
+}
+
+func TestHandlerRemindAbsoluteTime(t *testing.T) {
+	store := session.NewStore()
+	sched := scheduler.New()
+	defer sched.Stop()
+
+	handler := NewHandler(store, nil)
+	handler.SetScheduler(sched)
+
+	msg := &types.Message{
+		Text:    "/remind at 14:30 check email",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	if !strings.Contains(result.Text, "Reminder set") {
+		t.Errorf("Expected confirmation, got: %s", result.Text)
+	}
+
+	reminders := sched.List("telegram", "user123")
+	if len(reminders) != 1 {
+		t.Errorf("Expected 1 reminder, got %d", len(reminders))
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 func containsString(s, substr string) bool {

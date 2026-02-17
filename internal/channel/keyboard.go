@@ -33,9 +33,12 @@ func BotCommands() []BotCommand {
 		{Command: "history", Description: "Show recent messages"},
 		{Command: "export", Description: "Export conversation as file"},
 		{Command: "model", Description: "Show or switch AI model"},
+		{Command: "profile", Description: "Switch bot personality"},
+		{Command: "tts", Description: "Toggle text-to-speech"},
 		{Command: "skills", Description: "List loaded AI tools"},
-		{Command: "usage", Description: "Show token usage stats"},
 		{Command: "reminders", Description: "List active reminders"},
+		{Command: "cancel", Description: "Cancel a reminder"},
+		{Command: "usage", Description: "Show token usage stats"},
 		{Command: "help", Description: "Show all commands"},
 	}
 }

@@ -201,3 +201,78 @@ func TestReminderString(t *testing.T) {
 		t.Error("Reminder.String() should not be empty")
 	}
 }
+
+func TestParseAbsoluteTime(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"valid HH:MM", "14:30", false},
+		{"valid HH:MM:SS", "14:30:45", false},
+		{"midnight", "00:00", false},
+		{"end of day", "23:59", false},
+		{"invalid hour", "25:00", true},
+		{"invalid minute", "14:61", true},
+		{"invalid format", "14", true},
+		{"invalid format 2", "14:30:45:00", true},
+		{"non-numeric", "ab:cd", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dur, err := ParseAbsoluteTime(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParseAbsoluteTime(%q) expected error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("ParseAbsoluteTime(%q) unexpected error: %v", tt.input, err)
+				return
+			}
+			// Duration should be positive (scheduling in the future)
+			if dur <= 0 {
+				t.Errorf("ParseAbsoluteTime(%q) = %v, expected positive duration", tt.input, dur)
+			}
+			// Duration should be at most 24 hours
+			if dur > 24*time.Hour {
+				t.Errorf("ParseAbsoluteTime(%q) = %v, expected at most 24h", tt.input, dur)
+			}
+		})
+	}
+}
+
+func TestParseRemindCommand_AtFormat(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantMessage string
+		err         bool
+	}{
+		{"at 14:30 do something", "do something", false},
+		{"at 09:00 check email", "check email", false},
+		{"at 23:59:59 end of day", "end of day", false},
+		{"at 14:30", "", true}, // no message
+		{"at invalid time", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			_, gotMsg, err := ParseRemindCommand(tt.input)
+			if tt.err {
+				if err == nil {
+					t.Errorf("ParseRemindCommand(%q) expected error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("ParseRemindCommand(%q) unexpected error: %v", tt.input, err)
+				return
+			}
+			if gotMsg != tt.wantMessage {
+				t.Errorf("ParseRemindCommand(%q) message = %q, want %q", tt.input, gotMsg, tt.wantMessage)
+			}
+		})
+	}
+}
