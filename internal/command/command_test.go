@@ -1,6 +1,7 @@
 package command
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -721,6 +722,218 @@ func TestHandlerRemindAbsoluteTime(t *testing.T) {
 	if len(reminders) != 1 {
 		t.Errorf("Expected 1 reminder, got %d", len(reminders))
 	}
+}
+
+func TestHandlerBrowse(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	t.Run("no browser", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/browse https://example.com",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "not enabled") {
+			t.Errorf("Expected not enabled error, got: %s", result.Text)
+		}
+	})
+
+	t.Run("no args", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/browse",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Usage") {
+			t.Errorf("Expected usage hint, got: %s", result.Text)
+		}
+	})
+
+	t.Run("with mock browser", func(t *testing.T) {
+		mockBrowser := &mockBrowserNavigator{
+			result: "title: Example\n\ncontent: Hello World!",
+		}
+		handler.SetBrowser(mockBrowser)
+
+		msg := &types.Message{
+			Text:    "/browse https://example.com",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Hello World!") {
+			t.Errorf("Expected page content, got: %s", result.Text)
+		}
+	})
+
+	t.Run("auto-add https", func(t *testing.T) {
+		mockBrowser := &mockBrowserNavigator{
+			lastURL: "",
+			result:  "title: Test\n\ncontent: Test",
+		}
+		handler.SetBrowser(mockBrowser)
+
+		msg := &types.Message{
+			Text:    "/browse example.com",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		_, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if mockBrowser.lastURL != "https://example.com" {
+			t.Errorf("Expected https:// prefix, got: %s", mockBrowser.lastURL)
+		}
+	})
+}
+
+func TestHandlerCompact(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	t.Run("no compactor", func(t *testing.T) {
+		msg := &types.Message{
+			Text:    "/compact",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "user123",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "not enabled") {
+			t.Errorf("Expected not enabled error, got: %s", result.Text)
+		}
+	})
+
+	t.Run("empty session", func(t *testing.T) {
+		handler.SetCompactor(&mockCompactor{})
+
+		msg := &types.Message{
+			Text:    "/compact",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "newuser",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "No conversation") {
+			t.Errorf("Expected no conversation message, got: %s", result.Text)
+		}
+	})
+
+	t.Run("compacts messages", func(t *testing.T) {
+		// Add messages to a session
+		sess := store.GetOrCreate("telegram", "compactuser")
+		for i := 0; i < 20; i++ {
+			sess.AddMessage(types.Message{
+				Text:  fmt.Sprintf("Message %d", i),
+				IsBot: i%2 == 1,
+			})
+		}
+
+		handler.SetCompactor(&mockCompactor{
+			compactResult: []types.Message{
+				{Text: "Summary of conversation", IsBot: true},
+				{Text: "Message 18", IsBot: false},
+				{Text: "Message 19", IsBot: true},
+			},
+		})
+
+		msg := &types.Message{
+			Text:    "/compact",
+			Channel: "telegram",
+			Metadata: map[string]any{
+				"user_id": "compactuser",
+			},
+		}
+
+		result, err := handler.Handle(msg)
+		if err != nil {
+			t.Fatalf("Handle error: %v", err)
+		}
+
+		if !strings.Contains(result.Text, "Compacted") {
+			t.Errorf("Expected compaction confirmation, got: %s", result.Text)
+		}
+
+		// Verify session was updated
+		messages := sess.GetAllMessages()
+		if len(messages) != 3 {
+			t.Errorf("Expected 3 messages after compaction, got %d", len(messages))
+		}
+	})
+}
+
+// Mock implementations for testing
+type mockBrowserNavigator struct {
+	result  string
+	err     error
+	lastURL string
+}
+
+func (m *mockBrowserNavigator) Navigate(params map[string]interface{}) (string, error) {
+	if url, ok := params["url"].(string); ok {
+		m.lastURL = url
+	}
+	return m.result, m.err
+}
+
+type mockCompactor struct {
+	compactResult []types.Message
+	compactErr    error
+}
+
+func (m *mockCompactor) CompactIfNeeded(messages []types.Message) ([]types.Message, error) {
+	if m.compactResult != nil {
+		return m.compactResult, m.compactErr
+	}
+	return messages, nil
+}
+
+func (m *mockCompactor) ForceCompact(messages []types.Message) ([]types.Message, error) {
+	if m.compactResult != nil {
+		return m.compactResult, m.compactErr
+	}
+	return messages, nil
 }
 
 func boolPtr(b bool) *bool {
