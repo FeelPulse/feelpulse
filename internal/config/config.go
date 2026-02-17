@@ -35,6 +35,7 @@ type AgentConfig struct {
 	System           string `yaml:"system"`
 	FallbackModel    string `yaml:"fallbackModel"`    // Fallback model if primary fails
 	FallbackProvider string `yaml:"fallbackProvider"` // Fallback provider (defaults to same as primary)
+	RateLimit        int    `yaml:"rateLimit"`        // Max messages per minute per user (0 = disabled)
 }
 
 type ChannelsConfig struct {

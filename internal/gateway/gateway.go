@@ -18,6 +18,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/memory"
+	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/internal/store"
 	"github.com/FeelPulse/feelpulse/internal/watcher"
@@ -35,6 +36,7 @@ type Gateway struct {
 	commands  *command.Handler
 	memory    *memory.Manager
 	compactor *session.Compactor
+	limiter   *ratelimit.Limiter
 	watcher   *watcher.ConfigWatcher
 	cancelCtx context.CancelFunc
 	mu        sync.RWMutex // protects router, telegram, compactor during hot reload
@@ -66,6 +68,12 @@ func New(cfg *config.Config) *Gateway {
 		log.Printf("📂 Workspace loaded from %s", workspacePath)
 	}
 
+	// Initialize rate limiter
+	limiter := ratelimit.New(cfg.Agent.RateLimit)
+	if cfg.Agent.RateLimit > 0 {
+		log.Printf("⏱️  Rate limiting enabled: %d messages/minute", cfg.Agent.RateLimit)
+	}
+
 	gw := &Gateway{
 		cfg:      cfg,
 		mux:      http.NewServeMux(),
@@ -73,6 +81,7 @@ func New(cfg *config.Config) *Gateway {
 		db:       sqliteStore,
 		commands: command.NewHandler(sessions, cfg),
 		memory:   memMgr,
+		limiter:  limiter,
 	}
 	gw.setupRoutes()
 	return gw
@@ -262,13 +271,34 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 
 	// Update commands handler with new config
 	gw.commands = command.NewHandler(gw.sessions, newCfg)
+
+	// Update rate limiter if changed
+	if oldCfg.Agent.RateLimit != newCfg.Agent.RateLimit {
+		gw.limiter = ratelimit.New(newCfg.Agent.RateLimit)
+		if newCfg.Agent.RateLimit > 0 {
+			log.Printf("⏱️  Rate limit updated: %d messages/minute", newCfg.Agent.RateLimit)
+		} else {
+			log.Printf("⏱️  Rate limiting disabled")
+		}
+	}
 }
 
 // handleMessage processes incoming messages from channels
 func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
-	// Check for slash commands first
+	// Check for slash commands first (exempt from rate limiting)
 	if command.IsCommand(msg.Text) {
 		return gw.commands.Handle(msg)
+	}
+
+	// Check rate limit
+	userID := gw.getUserID(msg)
+	if !gw.limiter.Allow(userID) {
+		log.Printf("⏱️  Rate limited: %s", userID)
+		return &types.Message{
+			Text:    "⏱ Rate limit exceeded. Please wait a moment.",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
 	}
 
 	// Get router with read lock (safe during hot reload)
@@ -285,8 +315,7 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 		}, nil
 	}
 
-	// Get user ID for session key
-	userID := gw.getUserID(msg)
+	// Get session (userID already extracted above for rate limiting)
 	sess := gw.sessions.GetOrCreate(msg.Channel, userID)
 
 	// Add incoming message to session history (and persist)
