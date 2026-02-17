@@ -92,6 +92,7 @@ func New(cfg *config.Config) *Gateway {
 func (gw *Gateway) setupRoutes() {
 	gw.mux.HandleFunc("/health", gw.handleHealth)
 	gw.mux.HandleFunc("/hooks/", gw.handleHook)
+	gw.mux.HandleFunc("/v1/chat/completions", gw.handleOpenAIChatCompletion)
 }
 
 func (gw *Gateway) Start() error {
