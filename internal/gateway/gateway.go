@@ -31,25 +31,28 @@ import (
 )
 
 type Gateway struct {
-	cfg          *config.Config
-	mux          *http.ServeMux
-	server       *http.Server
-	telegram     *channel.TelegramBot
-	router       *agent.Router
-	sessions     *session.Store
-	db           *store.SQLiteStore
-	commands     *command.Handler
-	memory       *memory.Manager
-	compactor    *session.Compactor
-	limiter      *ratelimit.Limiter
-	watcher      *watcher.ConfigWatcher
-	heartbeat    *heartbeat.Service
-	usage        *usage.Tracker
-	browser      *browser.Browser
-	toolRegistry *tools.Registry
-	startTime    time.Time
-	cancelCtx    context.CancelFunc
-	mu           sync.RWMutex // protects router, telegram, compactor during hot reload
+	cfg            *config.Config
+	mux            *http.ServeMux
+	server         *http.Server
+	telegram       *channel.TelegramBot
+	router         *agent.Router
+	sessions       *session.Store
+	db             *store.SQLiteStore
+	commands       *command.Handler
+	memory         *memory.Manager
+	compactor      *session.Compactor
+	limiter        *ratelimit.Limiter
+	watcher        *watcher.ConfigWatcher
+	heartbeat      *heartbeat.Service
+	usage          *usage.Tracker
+	browser        *browser.Browser
+	toolRegistry   *tools.Registry
+	startTime      time.Time
+	lastMessageAt  time.Time
+	cancelCtx      context.CancelFunc
+	activeRequests sync.WaitGroup // tracks in-flight message processing
+	shutdownCh     chan struct{}  // signals shutdown in progress
+	mu             sync.RWMutex   // protects router, telegram, compactor during hot reload
 }
 
 func New(cfg *config.Config) *Gateway {
@@ -102,6 +105,7 @@ func New(cfg *config.Config) *Gateway {
 		usage:        usageTracker,
 		toolRegistry: toolRegistry,
 		startTime:    time.Now(),
+		shutdownCh:   make(chan struct{}),
 	}
 	gw.commands.SetUsageTracker(usageTracker)
 	gw.setupRoutes()
@@ -148,28 +152,108 @@ func (gw *Gateway) Start() error {
 
 	go func() {
 		<-quit
-		fmt.Println("\n👋 Shutting down...")
-		if gw.watcher != nil {
-			gw.watcher.Stop()
-		}
-		if gw.heartbeat != nil {
-			gw.heartbeat.Stop()
-		}
-		if gw.browser != nil {
-			gw.browser.Close()
-		}
-		gw.mu.RLock()
-		telegram := gw.telegram
-		gw.mu.RUnlock()
-		if telegram != nil {
-			telegram.Stop()
-		}
-		cancel()
-		gw.server.Close()
+		gw.gracefulShutdown(cancel)
 	}()
 
 	log.Printf("🫀 Gateway listening on %s", addr)
 	return gw.server.ListenAndServe()
+}
+
+// gracefulShutdown performs orderly shutdown of all components
+func (gw *Gateway) gracefulShutdown(cancel context.CancelFunc) {
+	fmt.Println("\n👋 Shutting down...")
+
+	// Signal shutdown in progress
+	close(gw.shutdownCh)
+
+	// Stop accepting new requests from Telegram
+	gw.mu.RLock()
+	telegram := gw.telegram
+	gw.mu.RUnlock()
+	if telegram != nil {
+		telegram.Stop()
+		log.Printf("📱 Telegram bot stopped")
+	}
+
+	// Wait for active message processing to complete (with timeout)
+	log.Printf("⏳ Waiting for active requests to complete...")
+	done := make(chan struct{})
+	go func() {
+		gw.activeRequests.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("✅ All active requests completed")
+	case <-time.After(30 * time.Second):
+		log.Printf("⚠️  Timeout waiting for requests, forcing shutdown")
+	}
+
+	// Stop background services
+	if gw.watcher != nil {
+		gw.watcher.Stop()
+	}
+	if gw.heartbeat != nil {
+		gw.heartbeat.Stop()
+	}
+
+	// Save all sessions to SQLite
+	if gw.db != nil {
+		savedCount := gw.saveAllSessions()
+		if savedCount > 0 {
+			log.Printf("💾 Sessions saved: %d", savedCount)
+		}
+	}
+
+	// Close browser
+	if gw.browser != nil {
+		gw.browser.Close()
+		log.Printf("🌐 Browser closed")
+	}
+
+	// Close database connection
+	if gw.db != nil {
+		if err := gw.db.Close(); err != nil {
+			log.Printf("⚠️  Error closing database: %v", err)
+		} else {
+			log.Printf("💾 Database connection closed")
+		}
+	}
+
+	// Cancel context and stop server
+	cancel()
+	gw.server.Close()
+
+	log.Printf("👋 Shutdown complete")
+}
+
+// saveAllSessions saves all active sessions to the database
+func (gw *Gateway) saveAllSessions() int {
+	if gw.db == nil {
+		return 0
+	}
+
+	sessions := gw.sessions.GetRecent(1000) // Get all sessions
+	count := 0
+
+	for _, sess := range sessions {
+		messages := sess.GetAllMessages()
+		if len(messages) == 0 {
+			continue
+		}
+
+		model := sess.GetModel()
+		profile := sess.GetProfile()
+
+		if err := gw.db.SaveWithProfile(sess.Key, messages, model, profile); err != nil {
+			log.Printf("⚠️  Failed to save session %s: %v", sess.Key, err)
+		} else {
+			count++
+		}
+	}
+
+	return count
 }
 
 // initializeAgent sets up the agent router and compactor
@@ -454,6 +538,26 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 
 // handleMessageStreaming processes messages with streaming support for Telegram
 func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (reply *types.Message, err error) {
+	// Track active request for graceful shutdown
+	gw.activeRequests.Add(1)
+	defer gw.activeRequests.Done()
+
+	// Check if shutting down
+	select {
+	case <-gw.shutdownCh:
+		return &types.Message{
+			Text:    "⏳ Service is shutting down. Please try again in a moment.",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
+	default:
+	}
+
+	// Update last message timestamp
+	gw.mu.Lock()
+	gw.lastMessageAt = time.Now()
+	gw.mu.Unlock()
+
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
 		if r := recover(); r != nil {
@@ -554,6 +658,26 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 
 // handleMessage processes incoming messages from channels
 func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err error) {
+	// Track active request for graceful shutdown
+	gw.activeRequests.Add(1)
+	defer gw.activeRequests.Done()
+
+	// Check if shutting down
+	select {
+	case <-gw.shutdownCh:
+		return &types.Message{
+			Text:    "⏳ Service is shutting down. Please try again in a moment.",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
+	default:
+	}
+
+	// Update last message timestamp
+	gw.mu.Lock()
+	gw.lastMessageAt = time.Now()
+	gw.mu.Unlock()
+
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
 		if r := recover(); r != nil {
