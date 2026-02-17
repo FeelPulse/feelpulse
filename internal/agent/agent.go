@@ -37,25 +37,34 @@ func NewRouter(cfg *config.Config) (*Router, error) {
 	return r, nil
 }
 
-// Process handles a message and returns a response
+// Process handles a single message and returns a response (no history)
 func (r *Router) Process(msg *types.Message) (*types.Message, error) {
+	return r.ProcessWithHistory([]types.Message{*msg})
+}
+
+// ProcessWithHistory handles a message with full conversation history
+func (r *Router) ProcessWithHistory(messages []types.Message) (*types.Message, error) {
 	if r.agent == nil {
 		return nil, fmt.Errorf("no agent configured")
 	}
 
-	// Build message history (for now, just single message)
-	messages := []types.Message{*msg}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("no messages provided")
+	}
 
-	// Call the agent
+	// Call the agent with full history
 	resp, err := r.agent.Chat(messages)
 	if err != nil {
 		return nil, fmt.Errorf("agent error: %w", err)
 	}
 
+	// Get channel from last message
+	channel := messages[len(messages)-1].Channel
+
 	// Create response message
 	reply := &types.Message{
 		Text:    resp.Text,
-		Channel: msg.Channel,
+		Channel: channel,
 		IsBot:   true,
 		Metadata: map[string]any{
 			"model":         resp.Model,

@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/FeelPulse/feelpulse/internal/agent"
 	"github.com/FeelPulse/feelpulse/internal/channel"
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -22,12 +24,14 @@ type Gateway struct {
 	server   *http.Server
 	telegram *channel.TelegramBot
 	router   *agent.Router
+	sessions *session.Store
 }
 
 func New(cfg *config.Config) *Gateway {
 	gw := &Gateway{
-		cfg: cfg,
-		mux: http.NewServeMux(),
+		cfg:      cfg,
+		mux:      http.NewServeMux(),
+		sessions: session.NewStore(),
 	}
 	gw.setupRoutes()
 	return gw
@@ -98,8 +102,18 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 		}, nil
 	}
 
-	// Route to agent
-	reply, err := gw.router.Process(msg)
+	// Get user ID for session key
+	userID := gw.getUserID(msg)
+	sess := gw.sessions.GetOrCreate(msg.Channel, userID)
+
+	// Add incoming message to session history
+	sess.AddMessage(*msg)
+
+	// Get conversation history for agent
+	history := sess.GetAllMessages()
+
+	// Route to agent with full history
+	reply, err := gw.router.ProcessWithHistory(history)
 	if err != nil {
 		log.Printf("❌ Agent error: %v", err)
 		return &types.Message{
@@ -109,7 +123,33 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 		}, nil
 	}
 
+	// Add bot reply to session history
+	sess.AddMessage(*reply)
+
 	return reply, nil
+}
+
+// getUserID extracts the user ID from a message
+func (gw *Gateway) getUserID(msg *types.Message) string {
+	if msg.Metadata != nil {
+		if userID, ok := msg.Metadata["user_id"]; ok {
+			switch v := userID.(type) {
+			case string:
+				return v
+			case int64:
+				return strconv.FormatInt(v, 10)
+			case int:
+				return strconv.Itoa(v)
+			case float64:
+				return strconv.FormatInt(int64(v), 10)
+			}
+		}
+	}
+	// Fallback to From field
+	if msg.From != "" {
+		return msg.From
+	}
+	return "unknown"
 }
 
 func (gw *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
