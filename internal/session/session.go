@@ -314,3 +314,64 @@ func ValidateModel(model string) bool {
 func SupportedModels() []string {
 	return supportedModels
 }
+
+// Count returns the total number of active sessions
+func (s *Store) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.sessions)
+}
+
+// GetRecent returns the most recently updated sessions (up to limit)
+func (s *Store) GetRecent(limit int) []*Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sessions := make([]*Session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+
+	// Sort by UpdatedAt descending
+	for i := 0; i < len(sessions)-1; i++ {
+		for j := i + 1; j < len(sessions); j++ {
+			if sessions[j].UpdatedAt.After(sessions[i].UpdatedAt) {
+				sessions[i], sessions[j] = sessions[j], sessions[i]
+			}
+		}
+	}
+
+	if len(sessions) > limit {
+		sessions = sessions[:limit]
+	}
+
+	return sessions
+}
+
+// Channel returns the channel part of the session key
+func (sess *Session) Channel() string {
+	parts := splitKey(sess.Key)
+	if len(parts) >= 1 {
+		return parts[0]
+	}
+	return ""
+}
+
+// UserID returns the user ID part of the session key
+func (sess *Session) UserID() string {
+	parts := splitKey(sess.Key)
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return ""
+}
+
+// splitKey splits a session key into channel and user ID
+func splitKey(key string) []string {
+	for i := 0; i < len(key); i++ {
+		if key[i] == ':' {
+			return []string{key[:i], key[i+1:]}
+		}
+	}
+	return []string{key}
+}

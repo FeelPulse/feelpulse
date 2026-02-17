@@ -128,6 +128,36 @@ func (t *Tracker) Reset(channel, userID string) {
 	delete(t.stats, key)
 }
 
+// GetGlobal returns aggregated stats across all sessions
+func (t *Tracker) GetGlobal() *Stats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	global := &Stats{
+		ModelsUsed: make(map[string]int),
+	}
+
+	for _, stats := range t.stats {
+		global.InputTokens += stats.InputTokens
+		global.OutputTokens += stats.OutputTokens
+		global.TotalTokens += stats.TotalTokens
+		global.RequestCount += stats.RequestCount
+
+		if global.FirstRequest.IsZero() || (!stats.FirstRequest.IsZero() && stats.FirstRequest.Before(global.FirstRequest)) {
+			global.FirstRequest = stats.FirstRequest
+		}
+		if stats.LastRequest.After(global.LastRequest) {
+			global.LastRequest = stats.LastRequest
+		}
+
+		for model, count := range stats.ModelsUsed {
+			global.ModelsUsed[model] += count
+		}
+	}
+
+	return global
+}
+
 // formatDuration formats a duration in human-readable form
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {

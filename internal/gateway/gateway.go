@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/agent"
 	"github.com/FeelPulse/feelpulse/internal/channel"
@@ -22,6 +23,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/internal/store"
+	"github.com/FeelPulse/feelpulse/internal/usage"
 	"github.com/FeelPulse/feelpulse/internal/watcher"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -40,6 +42,8 @@ type Gateway struct {
 	limiter   *ratelimit.Limiter
 	watcher   *watcher.ConfigWatcher
 	heartbeat *heartbeat.Service
+	usage     *usage.Tracker
+	startTime time.Time
 	cancelCtx context.CancelFunc
 	mu        sync.RWMutex // protects router, telegram, compactor during hot reload
 }
@@ -76,15 +80,21 @@ func New(cfg *config.Config) *Gateway {
 		log.Printf("⏱️  Rate limiting enabled: %d messages/minute", cfg.Agent.RateLimit)
 	}
 
+	// Initialize usage tracker
+	usageTracker := usage.NewTracker()
+
 	gw := &Gateway{
-		cfg:      cfg,
-		mux:      http.NewServeMux(),
-		sessions: sessions,
-		db:       sqliteStore,
-		commands: command.NewHandler(sessions, cfg),
-		memory:   memMgr,
-		limiter:  limiter,
+		cfg:       cfg,
+		mux:       http.NewServeMux(),
+		sessions:  sessions,
+		db:        sqliteStore,
+		commands:  command.NewHandler(sessions, cfg),
+		memory:    memMgr,
+		limiter:   limiter,
+		usage:     usageTracker,
+		startTime: time.Now(),
 	}
+	gw.commands.SetUsageTracker(usageTracker)
 	gw.setupRoutes()
 	return gw
 }
@@ -93,6 +103,7 @@ func (gw *Gateway) setupRoutes() {
 	gw.mux.HandleFunc("/health", gw.handleHealth)
 	gw.mux.HandleFunc("/hooks/", gw.handleHook)
 	gw.mux.HandleFunc("/v1/chat/completions", gw.handleOpenAIChatCompletion)
+	gw.mux.HandleFunc("/dashboard", gw.handleDashboard)
 }
 
 func (gw *Gateway) Start() error {
