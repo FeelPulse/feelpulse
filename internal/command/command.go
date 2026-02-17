@@ -37,6 +37,23 @@ type AdminProvider interface {
 	ReloadConfig(ctx context.Context) error
 }
 
+// SubAgentInfo holds info about a sub-agent
+type SubAgentInfo struct {
+	ID        string
+	Label     string
+	Task      string
+	Status    string
+	Result    string
+	Error     string
+}
+
+// SubAgentProvider interface for /agents command
+type SubAgentProvider interface {
+	ListSubAgents() []SubAgentInfo
+	GetSubAgent(id string) (*SubAgentInfo, bool)
+	CancelSubAgent(id string) error
+}
+
 // Handler processes slash commands
 type Handler struct {
 	sessions       *session.Store
@@ -47,6 +64,7 @@ type Handler struct {
 	browser        BrowserNavigator
 	compactor      ContextCompactor
 	admin          AdminProvider
+	subagents      SubAgentProvider
 	activeSession  map[string]string // userKey -> active session key
 }
 
@@ -87,6 +105,11 @@ func (h *Handler) SetCompactor(c ContextCompactor) {
 // SetAdmin sets the admin provider for /admin commands
 func (h *Handler) SetAdmin(a AdminProvider) {
 	h.admin = a
+}
+
+// SetSubAgents sets the sub-agent provider for /agents command
+func (h *Handler) SetSubAgents(s SubAgentProvider) {
+	h.subagents = s
 }
 
 // IsCommand checks if a message is a slash command
@@ -173,6 +196,10 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleSwitch(msg.Channel, userID, args)
 	case "admin":
 		response = h.handleAdmin(msg.Channel, userID, msg.From, args)
+	case "agents":
+		response = h.handleAgents()
+	case "agent":
+		response = h.handleAgent(args)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -793,6 +820,87 @@ func (h *Handler) handleAdminHelp() string {
   /admin reload — Reload config + workspace`
 }
 
+// handleAgents lists all sub-agents
+func (h *Handler) handleAgents() string {
+	if h.subagents == nil {
+		return "❌ Sub-agents are not available."
+	}
+
+	agents := h.subagents.ListSubAgents()
+	if len(agents) == 0 {
+		return "📭 No sub-agents have been spawned.\n\nSub-agents are background AI workers. They can be spawned via tool calls."
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🤖 *Sub-agents* (%d)\n\n", len(agents)))
+
+	for _, agent := range agents {
+		status := formatAgentStatus(agent.Status)
+		task := agent.Task
+		if len(task) > 50 {
+			task = task[:47] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("• `%s` (%s) — %s\n  Task: %s\n\n", agent.ID, agent.Label, status, task))
+	}
+
+	sb.WriteString("_Use `/agent <id>` for details._")
+	return sb.String()
+}
+
+// handleAgent shows details for a specific sub-agent
+func (h *Handler) handleAgent(args string) string {
+	if h.subagents == nil {
+		return "❌ Sub-agents are not available."
+	}
+
+	agentID := strings.TrimSpace(args)
+	if agentID == "" {
+		return "❌ Usage: `/agent <id>`\n\nUse `/agents` to list all sub-agents."
+	}
+
+	agent, exists := h.subagents.GetSubAgent(agentID)
+	if !exists {
+		return fmt.Sprintf("❌ Sub-agent not found: `%s`", agentID)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🤖 *Sub-agent: %s* (`%s`)\n\n", agent.Label, agent.ID))
+	sb.WriteString(fmt.Sprintf("📋 *Task:* %s\n", agent.Task))
+	sb.WriteString(fmt.Sprintf("📊 *Status:* %s\n", formatAgentStatus(agent.Status)))
+
+	if agent.Status == "done" && agent.Result != "" {
+		result := agent.Result
+		if len(result) > 2000 {
+			result = result[:1997] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("\n📝 *Result:*\n%s", result))
+	}
+
+	if agent.Error != "" {
+		sb.WriteString(fmt.Sprintf("\n❌ *Error:* %s", agent.Error))
+	}
+
+	return sb.String()
+}
+
+// formatAgentStatus returns emoji-formatted status for sub-agents
+func formatAgentStatus(status string) string {
+	switch status {
+	case "pending":
+		return "⏳ Pending"
+	case "running":
+		return "🔄 Running"
+	case "done":
+		return "✅ Done"
+	case "failed":
+		return "❌ Failed"
+	case "canceled":
+		return "🚫 Canceled"
+	default:
+		return status
+	}
+}
+
 // formatTimeAgo returns a human-readable time ago string
 func formatTimeAgo(t time.Time) string {
 	d := time.Since(t)
@@ -844,6 +952,10 @@ func (h *Handler) handleHelp() string {
 
 🛠️ *Skills*
   /skills — List loaded AI tools
+
+🤖 *Sub-agents*
+  /agents — List spawned sub-agents
+  /agent <id> — Show sub-agent details
 
 ⏰ *Reminders*
   /remind in <time> <msg> — Set reminder

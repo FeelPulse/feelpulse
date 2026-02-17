@@ -24,20 +24,27 @@ const (
 
 // SubAgent represents an isolated agent session running in the background
 type SubAgent struct {
-	ID              string
-	Label           string
-	Task            string
-	SystemPrompt    string
-	Status          string
-	Result          string
-	Error           string
-	StartedAt       time.Time
-	CompletedAt     time.Time
-	Messages        []types.Message
+	ID               string
+	Label            string
+	Task             string
+	SystemPrompt     string
+	Status           string
+	Result           string
+	Error            string
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	Messages         []types.Message
 	ParentSessionKey string
 
 	cancel context.CancelFunc
 	mu     sync.RWMutex
+}
+
+// GetInfo returns a thread-safe snapshot of agent info
+func (a *SubAgent) GetInfo() (status, label, task, result, errMsg string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.Status, a.Label, a.Task, a.Result, a.Error
 }
 
 // AgentRunner is the interface for running AI agent conversations
