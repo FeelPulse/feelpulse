@@ -471,90 +471,118 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 	}
 }
 
-// handleMessageWithStreaming processes a message using streaming with message editing
+// handleMessageWithStreaming processes a message using streaming with message editing.
+// Uses typing indicator while waiting, then sends/edits a real message once content arrives.
 func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int64, msg *types.Message) (*types.Message, error) {
-	// Send initial "thinking..." message
-	thinkingMsgID, err := t.SendMessageAndGetID(chatID, "💭 _Thinking..._", true)
-	if err != nil {
-		log.Printf("⚠️ Failed to send thinking message: %v", err)
-		// Fall back to non-streaming
-		if t.handler != nil {
-			return t.handler(msg)
-		}
-		return nil, err
-	}
-
 	// Track accumulated text and last update time
 	var accumulated strings.Builder
-	var lastUpdate time.Time
 	var mu sync.Mutex
+	var lastUpdate time.Time
+	var lastSentText string
+	var streamMsgID int64 // 0 until first message is sent
 	updateInterval := 500 * time.Millisecond
 
-	// Track what was last sent to Telegram to avoid duplicate edits
-	var lastSentText string
+	// Send typing indicator while waiting for first token
+	_ = t.SendTypingAction(chatID)
+	lastTyping := time.Now()
 
 	// Create delta handler that updates the message periodically
 	onDelta := func(delta string) {
 		mu.Lock()
 		accumulated.WriteString(delta)
 		currentText := accumulated.String()
-		shouldUpdate := time.Since(lastUpdate) >= updateInterval
+		sinceUpdate := time.Since(lastUpdate)
+		msgID := streamMsgID
 		mu.Unlock()
 
-		if shouldUpdate && currentText != "" {
-			// Truncate for Telegram's 4096 char limit
+		// No message sent yet — send the first one when we have content
+		if msgID == 0 && currentText != "" {
 			displayText := currentText
 			if len(displayText) > 4000 {
 				displayText = displayText[:4000] + "..."
 			}
-			// Skip if content hasn't changed
+			newID, err := t.SendMessageAndGetID(chatID, displayText, true)
+			if err != nil {
+				log.Printf("⚠️ Failed to send streaming message: %v", err)
+				return
+			}
+			mu.Lock()
+			streamMsgID = newID
+			lastSentText = displayText
+			lastUpdate = time.Now()
+			mu.Unlock()
+			return
+		}
+
+		// Message exists — edit it periodically
+		if msgID != 0 && sinceUpdate >= updateInterval && currentText != "" {
+			displayText := currentText
+			if len(displayText) > 4000 {
+				displayText = displayText[:4000] + "..."
+			}
 			if displayText == lastSentText {
 				return
 			}
-			if err := t.EditMessageText(chatID, thinkingMsgID, displayText, nil); err != nil {
+			if err := t.EditMessageText(chatID, msgID, displayText, nil); err != nil {
 				log.Printf("⚠️ Failed to update streaming message: %v", err)
 			} else {
+				mu.Lock()
 				lastSentText = displayText
+				lastUpdate = time.Now()
+				mu.Unlock()
 			}
-			mu.Lock()
-			lastUpdate = time.Now()
-			mu.Unlock()
+			return
 		}
 
-		// Send typing indicator periodically to keep it visible
-		mu.Lock()
-		sinceLastUpdate := time.Since(lastUpdate)
-		mu.Unlock()
-		if sinceLastUpdate > 4*time.Second {
+		// Keep typing indicator alive while waiting for first content
+		if msgID == 0 && time.Since(lastTyping) > 4*time.Second {
 			_ = t.SendTypingAction(chatID)
+			lastTyping = time.Now()
 		}
 	}
 
 	// Call streaming handler
 	reply, err := t.streamingHandler(msg, onDelta)
 	if err != nil {
-		// Update message with error
-		_ = t.EditMessageText(chatID, thinkingMsgID, "❌ Sorry, I encountered an error processing your message.", nil)
+		mu.Lock()
+		msgID := streamMsgID
+		mu.Unlock()
+		if msgID != 0 {
+			_ = t.EditMessageText(chatID, msgID, "❌ Sorry, I encountered an error processing your message.", nil)
+		} else {
+			_ = t.SendMessage(chatID, "❌ Sorry, I encountered an error processing your message.", false)
+		}
 		return nil, err
 	}
 
 	// Final update with complete response
 	if reply != nil && reply.Text != "" {
 		parts := SplitLongMessage(reply.Text, SafeMessageLength)
-		
-		// First part: edit the thinking message (skip if already showing same content)
+
+		mu.Lock()
+		msgID := streamMsgID
+		sent := lastSentText
+		mu.Unlock()
+
+		// First part: edit existing message or send new one
 		finalDisplay := parts[0]
 		if len(finalDisplay) > 4000 {
 			finalDisplay = finalDisplay[:4000] + "..."
 		}
-		
-		if finalDisplay != lastSentText {
-			if err := t.EditMessageText(chatID, thinkingMsgID, parts[0], nil); err != nil {
-				log.Printf("⚠️ Failed to send final message update: %v", err)
-				_ = t.SendMessage(chatID, parts[0], true)
+
+		if msgID != 0 {
+			if finalDisplay != sent {
+				if err := t.EditMessageText(chatID, msgID, parts[0], nil); err != nil {
+					log.Printf("⚠️ Failed to send final message update: %v", err)
+				}
+			}
+		} else {
+			// Never got any streaming deltas — send the full reply
+			if err := t.SendMessage(chatID, parts[0], true); err != nil {
+				log.Printf("❌ Failed to send reply: %v", err)
 			}
 		}
-		
+
 		// Additional parts: send as new messages
 		for i := 1; i < len(parts); i++ {
 			if err := t.SendMessage(chatID, parts[i], true); err != nil {
