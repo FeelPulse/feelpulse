@@ -45,13 +45,11 @@ func TestValidateModel(t *testing.T) {
 	}{
 		{"claude-sonnet-4-20250514", true},
 		{"claude-opus-4-20250514", true},
-		{"gpt-4o", true},
-		{"gpt-4-turbo", true},
-		{"gpt-3.5-turbo", true},
-		{"claude-3-opus", true},
+		{"claude-3-5-sonnet-20241022", true},
+		{"claude-3-opus-20240229", true},
 		{"invalid-model", false},
 		{"", false},
-		{"gpt", false},
+		{"gpt-4o", false}, // Not supported (Anthropic only)
 	}
 
 	for _, tt := range tests {

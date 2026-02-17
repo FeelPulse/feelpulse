@@ -172,26 +172,14 @@ func (sess *Session) Len() int {
 	return len(sess.Messages)
 }
 
-// supportedModels is the list of known valid models
+// supportedModels is the list of known valid Anthropic models
 var supportedModels = []string{
-	// Anthropic Claude
 	"claude-sonnet-4-20250514",
 	"claude-opus-4-20250514",
 	"claude-3-5-sonnet-20241022",
 	"claude-3-opus-20240229",
 	"claude-3-sonnet-20240229",
 	"claude-3-haiku-20240307",
-	"claude-3-opus",
-	"claude-3-sonnet",
-	"claude-3-haiku",
-	// OpenAI GPT
-	"gpt-4o",
-	"gpt-4o-mini",
-	"gpt-4-turbo",
-	"gpt-4",
-	"gpt-3.5-turbo",
-	"o1-preview",
-	"o1-mini",
 }
 
 // ValidateModel checks if a model name is supported

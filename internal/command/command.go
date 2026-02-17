@@ -254,17 +254,8 @@ func (h *Handler) handleModels() string {
 	
 	var sb strings.Builder
 	sb.WriteString("🤖 *Available Models*\n\n")
-	sb.WriteString("*Anthropic Claude:*\n")
 	for _, m := range models {
-		if strings.HasPrefix(m, "claude") {
-			sb.WriteString(fmt.Sprintf("  • %s\n", m))
-		}
-	}
-	sb.WriteString("\n*OpenAI GPT:*\n")
-	for _, m := range models {
-		if strings.HasPrefix(m, "gpt") || strings.HasPrefix(m, "o1") {
-			sb.WriteString(fmt.Sprintf("  • %s\n", m))
-		}
+		sb.WriteString(fmt.Sprintf("  • %s\n", m))
 	}
 	sb.WriteString("\nSwitch: /model <name>")
 	return sb.String()
