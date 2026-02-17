@@ -17,6 +17,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/channel"
 	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/heartbeat"
 	"github.com/FeelPulse/feelpulse/internal/memory"
 	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
@@ -38,6 +39,7 @@ type Gateway struct {
 	compactor *session.Compactor
 	limiter   *ratelimit.Limiter
 	watcher   *watcher.ConfigWatcher
+	heartbeat *heartbeat.Service
 	cancelCtx context.CancelFunc
 	mu        sync.RWMutex // protects router, telegram, compactor during hot reload
 }
@@ -100,6 +102,9 @@ func (gw *Gateway) Start() error {
 	gw.initializeAgent(ctx)
 	gw.initializeTelegram(ctx)
 
+	// Initialize heartbeat service
+	gw.initializeHeartbeat()
+
 	// Start config hot reload watcher
 	gw.startConfigWatcher(ctx)
 
@@ -119,6 +124,9 @@ func (gw *Gateway) Start() error {
 		fmt.Println("\n👋 Shutting down...")
 		if gw.watcher != nil {
 			gw.watcher.Stop()
+		}
+		if gw.heartbeat != nil {
+			gw.heartbeat.Stop()
 		}
 		gw.mu.RLock()
 		telegram := gw.telegram
@@ -192,6 +200,42 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	gw.mu.Lock()
 	gw.telegram = telegram
 	gw.mu.Unlock()
+}
+
+// initializeHeartbeat sets up the heartbeat service
+func (gw *Gateway) initializeHeartbeat() {
+	if !gw.cfg.Heartbeat.Enabled {
+		return
+	}
+
+	workspacePath := gw.cfg.Workspace.Path
+	if workspacePath == "" {
+		workspacePath = memory.DefaultWorkspacePath()
+	}
+
+	hbCfg := &heartbeat.Config{
+		Enabled:         gw.cfg.Heartbeat.Enabled,
+		IntervalMinutes: gw.cfg.Heartbeat.IntervalMinutes,
+	}
+
+	gw.heartbeat = heartbeat.New(hbCfg, workspacePath)
+
+	// Set callback to send messages via Telegram
+	gw.heartbeat.SetCallback(func(ch string, userID int64, message string) {
+		gw.mu.RLock()
+		telegram := gw.telegram
+		gw.mu.RUnlock()
+
+		if telegram != nil && ch == "telegram" {
+			if err := telegram.SendMessage(userID, message, true); err != nil {
+				log.Printf("⚠️ Failed to send heartbeat to %d: %v", userID, err)
+			} else {
+				log.Printf("💓 Sent heartbeat to user %d", userID)
+			}
+		}
+	})
+
+	gw.heartbeat.Start()
 }
 
 // handleTelegramCallback processes inline keyboard button presses
@@ -285,6 +329,13 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 
 // handleMessage processes incoming messages from channels
 func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
+	// Register user for heartbeat (if enabled)
+	if gw.heartbeat != nil {
+		if uid, ok := gw.getUserIDInt64(msg); ok {
+			gw.heartbeat.RegisterUser(msg.Channel, uid)
+		}
+	}
+
 	// Check for slash commands first (exempt from rate limiting)
 	if command.IsCommand(msg.Text) {
 		return gw.commands.Handle(msg)
@@ -373,6 +424,23 @@ func (gw *Gateway) getUserID(msg *types.Message) string {
 		return msg.From
 	}
 	return "unknown"
+}
+
+// getUserIDInt64 extracts the user ID as int64 from a message
+func (gw *Gateway) getUserIDInt64(msg *types.Message) (int64, bool) {
+	if msg.Metadata != nil {
+		if userID, ok := msg.Metadata["user_id"]; ok {
+			switch v := userID.(type) {
+			case int64:
+				return v, true
+			case int:
+				return int64(v), true
+			case float64:
+				return int64(v), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (gw *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -14,6 +14,12 @@ type Config struct {
 	Channels  ChannelsConfig  `yaml:"channels"`
 	Hooks     HooksConfig     `yaml:"hooks"`
 	Workspace WorkspaceConfig `yaml:"workspace"`
+	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
+}
+
+type HeartbeatConfig struct {
+	Enabled         bool `yaml:"enabled"`
+	IntervalMinutes int  `yaml:"intervalMinutes"`
 }
 
 type WorkspaceConfig struct {
@@ -84,6 +90,10 @@ func Default() *Config {
 		},
 		Workspace: WorkspaceConfig{
 			Path: filepath.Join(home, ".feelpulse", "workspace"),
+		},
+		Heartbeat: HeartbeatConfig{
+			Enabled:         false,
+			IntervalMinutes: 60,
 		},
 	}
 }
