@@ -164,19 +164,6 @@ func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Log request
-	log.Printf("📤 [anthropic] model=%s auth=%s messages=%d", c.model, c.AuthModeName(), len(anthropicMsgs))
-	for i, msg := range anthropicMsgs {
-		preview := msg.Content
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		log.Printf("   [%d] %s: %s", i, msg.Role, preview)
-	}
-	if reqBody.System != "" {
-		log.Printf("   system: %s", reqBody.System)
-	}
-
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
@@ -193,11 +180,9 @@ func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, 
 		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
 		req.Header.Set("x-app", "cli")
 		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-		log.Printf("📤 [anthropic] headers: Authorization=Bearer sk-ant-oat-***, anthropic-beta=%s", "claude-code-20250219,oauth-2025-04-20")
 	} else {
 		// Standard API key auth
 		req.Header.Set("x-api-key", c.apiKey)
-		log.Printf("📤 [anthropic] headers: x-api-key=sk-ant-***")
 	}
 
 	// Send request
@@ -212,8 +197,6 @@ func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-
-	log.Printf("📥 [anthropic] status=%d", resp.StatusCode)
 
 	// Check for errors
 	if resp.StatusCode != http.StatusOK {
@@ -238,12 +221,7 @@ func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, 
 		}
 	}
 
-	log.Printf("📥 [anthropic] model=%s input=%d output=%d", anthropicResp.Model, anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)
-	preview := text
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-	log.Printf("📥 [anthropic] response: %s", preview)
+	log.Printf("📥 [anthropic] response: %s", text)
 
 	return &types.AgentResponse{
 		Text:  text,
