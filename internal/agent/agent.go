@@ -34,6 +34,11 @@ func NewRouter(cfg *config.Config) (*Router, error) {
 			return nil, fmt.Errorf("anthropic credentials not configured (set apiKey or authToken)")
 		}
 		r.agent = NewAnthropicClient(cfg.Agent.APIKey, cfg.Agent.AuthToken, cfg.Agent.Model)
+	case "openai":
+		if cfg.Agent.APIKey == "" {
+			return nil, fmt.Errorf("openai API key not configured")
+		}
+		r.agent = NewOpenAIClient(cfg.Agent.APIKey, cfg.Agent.Model)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", cfg.Agent.Provider)
 	}
