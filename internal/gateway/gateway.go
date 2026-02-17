@@ -817,23 +817,77 @@ func (gw *Gateway) getUserIDInt64(msg *types.Message) (int64, bool) {
 }
 
 func (gw *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
-	status := map[string]any{
-		"ok":       true,
-		"version":  "0.1.0",
-		"channels": map[string]bool{},
-	}
-
 	gw.mu.RLock()
-	channels := status["channels"].(map[string]bool)
-	channels["telegram"] = gw.telegram != nil
-
-	if gw.router != nil {
-		status["agent"] = gw.router.Agent().Name()
-	}
+	router := gw.router
+	telegram := gw.telegram
+	browser := gw.browser
+	lastMsg := gw.lastMessageAt
 	gw.mu.RUnlock()
 
+	// Calculate uptime
+	uptime := time.Since(gw.startTime)
+	uptimeStr := formatDuration(uptime)
+
+	// Count sessions
+	sessionCount := gw.sessions.Count()
+
+	// Count registered tools
+	toolCount := 0
+	if gw.toolRegistry != nil {
+		toolCount = len(gw.toolRegistry.List())
+	}
+
+	// Check if agent is configured
+	agentConfigured := router != nil
+
+	status := map[string]any{
+		"ok":               agentConfigured,
+		"version":          "0.1.0",
+		"uptime":           uptimeStr,
+		"uptime_seconds":   int(uptime.Seconds()),
+		"sessions_count":   sessionCount,
+		"tools_registered": toolCount,
+		"browser_available": browser != nil,
+		"channels": map[string]bool{
+			"telegram": telegram != nil,
+		},
+	}
+
+	// Add last message timestamp if we've received any messages
+	if !lastMsg.IsZero() {
+		status["last_message_at"] = lastMsg.Format(time.RFC3339)
+	}
+
+	// Add agent info if configured
+	if agentConfigured {
+		status["agent"] = router.Agent().Name()
+	} else {
+		status["error"] = "Agent not configured (missing API key or auth token)"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+
+	// Return 503 if agent is not configured
+	if !agentConfigured {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
 	json.NewEncoder(w).Encode(status)
+}
+
+// formatDuration formats a duration as human-readable string
+func formatDuration(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 func (gw *Gateway) handleHook(w http.ResponseWriter, r *http.Request) {
