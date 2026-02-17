@@ -32,6 +32,12 @@ cd feelpulse && make build
 ./build/feelpulse start
 ```
 
+Or use the interactive quickstart script:
+
+```bash
+./scripts/quickstart.sh
+```
+
 Or with Docker:
 
 ```bash
@@ -64,6 +70,9 @@ docker run -d -p 18789:18789 -v ~/.feelpulse:/home/feelpulse/.feelpulse feelpuls
 - ⏰ **Reminders** — Persistent reminders with relative/absolute time support
 - 💓 **Heartbeat** — Proactive periodic checks (optional)
 - 🌐 **Browser Automation** — Web scraping and automation tools
+- 🤖 **Sub-Agents** — Spawn background agents for autonomous tasks
+- 👁️ **Vision** — Image analysis via Telegram photos
+- 📌 **Pins** — Pin important context to persist across conversations
 
 ### Infrastructure
 - ⏱️ **Rate Limiting** — Configurable per-user message rate limits
@@ -197,6 +206,9 @@ metrics:
 2. **Claude Subscription Token**: Run `claude setup-token` and use `feelpulse auth`
 3. **Telegram Bot Token**: Create via [@BotFather](https://t.me/BotFather)
 
+📖 **Full configuration reference:** [docs/configuration.md](docs/configuration.md)  
+📝 **Example config:** [docs/config-example.yaml](docs/config-example.yaml)
+
 ---
 
 ## 🖥️ CLI Commands
@@ -244,6 +256,10 @@ feelpulse help           # Show help
 | `/cancel <id>` | Cancel a reminder |
 | `/usage` | Show token usage stats |
 | `/compact` | Force context compaction |
+| `/agents` | List spawned sub-agents |
+| `/pin <text>` | Pin important context |
+| `/pins` | List pinned context |
+| `/unpin <id>` | Remove a pin |
 | `/help` | Show all commands |
 
 ---
@@ -393,6 +409,9 @@ make uninstall-service  # Uninstall systemd service
 
 ## 🏗️ Architecture
 
+📐 **Detailed architecture diagram:** [docs/c4-architecture.md](docs/c4-architecture.md)  
+📖 **Architecture overview:** [docs/architecture.md](docs/architecture.md)
+
 ```
 feelpulse/
 ├── cmd/feelpulse/     # CLI entry point
@@ -412,6 +431,7 @@ feelpulse/
 │   ├── session/       # Conversation state, compaction
 │   ├── skills/        # Skills/tools loader
 │   ├── store/         # SQLite persistence
+│   ├── subagent/      # Background sub-agent system
 │   ├── tools/         # Tool registry
 │   ├── tts/           # Text-to-speech
 │   ├── tui/           # Terminal UI
@@ -433,12 +453,16 @@ feelpulse/
 | Workspace Files | ✅ | ✅ | ❌ |
 | Skills System | ✅ | ✅ | ❌ |
 | Tool Calling | ✅ | ✅ | ✅ |
+| Sub-Agents | ✅ | ✅ | ❌ |
 | Context Compaction | ✅ | ❌ | ❌ |
 | Session Persistence | ✅ SQLite | ✅ | ❌ |
+| Vision (Images) | ✅ | ✅ | ✅ |
 | TTS | ✅ | ✅ | ❌ |
 | Hot Reload | ✅ | ❌ | ❌ |
 | systemd Service | ✅ | ❌ | ❌ |
 | Prometheus Metrics | ✅ | ❌ | ❌ |
+| Rate Limiting | ✅ | ❌ | — |
+| Browser Automation | ✅ | ✅ | ❌ |
 | Docker Support | ✅ | ✅ | — |
 
 ---

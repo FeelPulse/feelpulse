@@ -1,0 +1,245 @@
+# FeelPulse Configuration Example
+# ================================
+# 
+# This file shows all available configuration options with their defaults
+# and descriptions. Copy to ~/.feelpulse/config.yaml and customize.
+#
+# For full documentation, see: docs/configuration.md
+
+# =============================================================================
+# Gateway - HTTP server configuration
+# =============================================================================
+gateway:
+  # Port for HTTP server (health checks, webhooks, dashboard)
+  # Default: 18789
+  port: 18789
+  
+  # Bind address
+  # - "localhost" for local only (recommended for dev)
+  # - "0.0.0.0" for all interfaces (needed for Docker/remote access)
+  # Default: "localhost"
+  bind: localhost
+
+# =============================================================================
+# Agent - AI provider configuration
+# =============================================================================
+agent:
+  # AI provider: "anthropic" or "openai"
+  # Default: "anthropic"
+  provider: anthropic
+  
+  # Model to use
+  # Supported: claude-sonnet-4-20250514, claude-opus-4-20250514,
+  #            claude-3-5-sonnet-20241022, claude-3-opus-20240229,
+  #            claude-3-sonnet-20240229, claude-3-haiku-20240307
+  # Default: "claude-sonnet-4-20250514"
+  model: claude-sonnet-4-20250514
+  
+  # Anthropic API key (from console.anthropic.com)
+  # Format: sk-ant-api03-...
+  # REQUIRED: Either apiKey or authToken must be set
+  apiKey: ""
+  
+  # Claude subscription setup token (alternative to API key)
+  # Get via: claude setup-token
+  # Format: sk-ant-oat01-...
+  # Use `feelpulse auth` to configure interactively
+  authToken: ""
+  
+  # Maximum tokens in AI response
+  # Default: 4096
+  maxTokens: 4096
+  
+  # Context compaction threshold in tokens
+  # When conversation exceeds this, older messages are summarized
+  # Default: 80000
+  maxContextTokens: 80000
+  
+  # System prompt (overridden by SOUL.md if present)
+  # Leave empty to use workspace SOUL.md
+  system: ""
+  
+  # Fallback model if primary model fails (optional)
+  # Useful for rate limit resilience
+  fallbackModel: ""
+  
+  # Fallback provider (defaults to primary provider)
+  fallbackProvider: ""
+  
+  # Rate limit: max messages per minute per user
+  # 0 = disabled (no rate limiting)
+  # Recommended: 10-30 for personal use
+  # Default: 0
+  rateLimit: 10
+
+# =============================================================================
+# Channels - Chat platform integrations
+# =============================================================================
+channels:
+  # Telegram Bot
+  telegram:
+    # Enable Telegram integration
+    # Default: false
+    enabled: true
+    
+    # Bot token from @BotFather
+    # Create: https://t.me/BotFather → /newbot
+    token: ""
+    
+    # Allowed usernames (SECURITY!)
+    # Empty list = ANYONE can use the bot (dangerous!)
+    # Non-empty = only these Telegram usernames allowed
+    # Example: ["alice", "bob"]
+    # Default: []
+    allowedUsers: []
+  
+  # Discord Bot (beta)
+  discord:
+    # Enable Discord integration
+    # Default: false
+    enabled: false
+    
+    # Discord bot token from Developer Portal
+    # Create: https://discord.com/developers/applications
+    token: ""
+
+# =============================================================================
+# Tools - AI tool capabilities
+# =============================================================================
+tools:
+  # Shell command execution (SECURITY RISK!)
+  exec:
+    # Enable exec tool
+    # ⚠️  WARNING: Allows AI to run shell commands!
+    # Default: false
+    enabled: false
+    
+    # Allowed command prefixes (whitelist)
+    # Only commands starting with these are permitted
+    # Empty = deny all commands
+    # Example: ["echo", "ls", "cat", "git status"]
+    # Default: []
+    allowedCommands: []
+    
+    # Command timeout in seconds
+    # Default: 30
+    timeoutSeconds: 30
+  
+  # File system access (sandboxed to workspace)
+  file:
+    # Enable file tools (file_read, file_write, file_list)
+    # Safer than exec - sandboxed to workspace directory
+    # Default: true
+    enabled: true
+
+# =============================================================================
+# Browser - Browser automation tools
+# =============================================================================
+browser:
+  # Enable browser tools
+  # Requires Chrome/Chromium installed
+  # Default: false
+  enabled: false
+  
+  # Run browser without visible window
+  # Default: true
+  headless: true
+  
+  # Use stealth mode to avoid bot detection
+  # Default: true
+  stealth: true
+  
+  # Page load timeout in seconds
+  # Default: 30
+  timeoutSeconds: 30
+
+# =============================================================================
+# Workspace - Workspace files and profiles
+# =============================================================================
+workspace:
+  # Path to workspace directory
+  # Contains: SOUL.md, USER.md, MEMORY.md, skills/
+  # Default: ~/.feelpulse/workspace
+  path: ~/.feelpulse/workspace
+  
+  # Personality profiles (alternative SOUL.md files)
+  # Switch with /profile use <name>
+  # Example:
+  #   profiles:
+  #     friendly: ~/.feelpulse/workspace/profiles/friendly-soul.md
+  #     professional: ~/.feelpulse/workspace/profiles/professional-soul.md
+  profiles: {}
+
+# =============================================================================
+# Heartbeat - Proactive periodic checks
+# =============================================================================
+heartbeat:
+  # Enable heartbeat service
+  # AI can proactively reach out during heartbeats
+  # Default: false
+  enabled: false
+  
+  # Heartbeat interval in minutes
+  # Recommended: 30-60 for personal use
+  # Default: 60
+  intervalMinutes: 60
+
+# =============================================================================
+# TTS - Text-to-speech
+# =============================================================================
+tts:
+  # Enable TTS globally
+  # Users can toggle with /tts on|off
+  # Default: false
+  enabled: false
+  
+  # TTS command (auto-detected if empty)
+  # Supported: espeak (Linux), say (macOS), festival (Linux)
+  # Default: "" (auto-detect)
+  command: ""
+
+# =============================================================================
+# Hooks - Webhook endpoints
+# =============================================================================
+hooks:
+  # Enable webhook endpoint at /hooks/*
+  # Default: true
+  enabled: true
+  
+  # Bearer token for webhook authentication
+  # If set, requests must include: Authorization: Bearer <token>
+  # Default: "" (no auth required)
+  token: ""
+  
+  # Base path for webhooks
+  # Default: "/hooks"
+  path: /hooks
+
+# =============================================================================
+# Metrics - Prometheus metrics endpoint
+# =============================================================================
+metrics:
+  # Enable metrics endpoint
+  # Default: true
+  enabled: true
+  
+  # Metrics endpoint path
+  # Default: "/metrics"
+  path: /metrics
+
+# =============================================================================
+# Admin - Admin user configuration
+# =============================================================================
+admin:
+  # Admin username (for /admin commands)
+  # Defaults to first user in allowedUsers if not set
+  # Default: ""
+  username: ""
+
+# =============================================================================
+# Log - Logging configuration
+# =============================================================================
+log:
+  # Log level: debug, info, warn, error
+  # Default: "info"
+  level: info
