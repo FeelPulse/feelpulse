@@ -1,0 +1,23 @@
+# Binaries
+feelpulse
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build
+/dist/
+/bin/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (may contain secrets)
+*.local.yaml
