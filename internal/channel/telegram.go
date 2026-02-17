@@ -376,14 +376,20 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 
 	// Final update with complete response
 	if reply != nil && reply.Text != "" {
-		finalText := reply.Text
-		if len(finalText) > 4000 {
-			finalText = finalText[:4000] + "..."
-		}
-		if err := t.EditMessageText(chatID, thinkingMsgID, finalText, nil); err != nil {
+		parts := SplitLongMessage(reply.Text, SafeMessageLength)
+		
+		// First part: edit the thinking message
+		if err := t.EditMessageText(chatID, thinkingMsgID, parts[0], nil); err != nil {
 			log.Printf("⚠️ Failed to send final message update: %v", err)
 			// Try sending as new message
-			_ = t.SendMessage(chatID, reply.Text, true)
+			_ = t.SendMessage(chatID, parts[0], true)
+		}
+		
+		// Additional parts: send as new messages
+		for i := 1; i < len(parts); i++ {
+			if err := t.SendMessage(chatID, parts[i], true); err != nil {
+				log.Printf("❌ Failed to send continuation message: %v", err)
+			}
 		}
 	}
 
@@ -411,15 +417,36 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 	// Check if reply has a keyboard
 	if reply.Keyboard != nil {
 		if keyboard, ok := reply.Keyboard.(InlineKeyboard); ok {
-			if err := t.SendMessageWithKeyboard(chatID, reply.Text, keyboard, true); err != nil {
-				log.Printf("❌ Failed to send reply with keyboard: %v", err)
+			// For messages with keyboards, send first part with keyboard
+			parts := SplitLongMessage(reply.Text, SafeMessageLength)
+			if len(parts) == 1 {
+				if err := t.SendMessageWithKeyboard(chatID, reply.Text, keyboard, true); err != nil {
+					log.Printf("❌ Failed to send reply with keyboard: %v", err)
+				}
+			} else {
+				// Send all parts, attach keyboard to last one
+				for i, part := range parts {
+					if i == len(parts)-1 {
+						if err := t.SendMessageWithKeyboard(chatID, part, keyboard, true); err != nil {
+							log.Printf("❌ Failed to send reply with keyboard: %v", err)
+						}
+					} else {
+						if err := t.SendMessage(chatID, part, true); err != nil {
+							log.Printf("❌ Failed to send reply part: %v", err)
+						}
+					}
+				}
 			}
 			return
 		}
 	}
-	// No keyboard, send regular message
-	if err := t.SendMessage(chatID, reply.Text, true); err != nil {
-		log.Printf("❌ Failed to send reply: %v", err)
+	
+	// No keyboard - split long messages
+	parts := SplitLongMessage(reply.Text, SafeMessageLength)
+	for _, part := range parts {
+		if err := t.SendMessage(chatID, part, true); err != nil {
+			log.Printf("❌ Failed to send reply: %v", err)
+		}
 	}
 }
 
