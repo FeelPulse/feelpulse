@@ -57,17 +57,28 @@ type AnthropicTool struct {
 
 // SSEEvent represents a Server-Sent Event from the streaming API
 type SSEEvent struct {
-	Type    string         `json:"type"`
-	Index   int            `json:"index,omitempty"`
-	Delta   SSEDelta       `json:"delta,omitempty"`
-	Message *SSEMessage    `json:"message,omitempty"`
-	Usage   *AnthropicUsage `json:"usage,omitempty"`
+	Type         string           `json:"type"`
+	Index        int              `json:"index,omitempty"`
+	Delta        SSEDelta         `json:"delta,omitempty"`
+	Message      *SSEMessage      `json:"message,omitempty"`
+	Usage        *AnthropicUsage  `json:"usage,omitempty"`
+	ContentBlock *SSEContentBlock `json:"content_block,omitempty"`
 }
 
 // SSEDelta represents a text delta in streaming
 type SSEDelta struct {
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"` // for input_json_delta
+	StopReason  string `json:"stop_reason,omitempty"`  // for message_delta
+}
+
+// SSEContentBlock represents a content block start event
+type SSEContentBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // SSEMessage represents message info in streaming
@@ -470,7 +481,7 @@ func parseSSEEvent(data string) (*SSEEvent, error) {
 type ToolExecutor func(name string, input map[string]any) (string, error)
 
 // ChatWithTools sends messages to Claude with tools and implements the full agentic loop.
-// It will call tools as requested by Claude and continue the conversation until done.
+// Uses streaming for real-time text delivery. Calls tools as requested and continues until done.
 // maxIterations prevents infinite loops (default 10 if <= 0).
 func (c *AnthropicClient) ChatWithTools(
 	messages []types.Message,
@@ -484,10 +495,8 @@ func (c *AnthropicClient) ChatWithTools(
 		maxIterations = 10
 	}
 
-	// Convert our messages to Anthropic format
 	anthropicMsgs := convertMessagesToAnthropic(messages)
 
-	// Use default system prompt if not provided
 	if systemPrompt == "" {
 		systemPrompt = DefaultSystemPrompt
 	}
@@ -497,71 +506,51 @@ func (c *AnthropicClient) ChatWithTools(
 	var model string
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
-		// Build request
 		reqBody := AnthropicRequest{
 			Model:     c.model,
 			MaxTokens: defaultMaxTokens,
 			Messages:  anthropicMsgs,
 			System:    systemPrompt,
 			Tools:     tools,
+			Stream:    true,
 		}
 
-		resp, err := c.callAPI(reqBody)
+		textContent, toolUseBlocks, respModel, usage, stopReason, err := c.callAPIStreamTools(reqBody, callback)
 		if err != nil {
 			return nil, err
 		}
 
-		model = resp.Model
-		totalUsage.InputTokens += resp.Usage.InputTokens
-		totalUsage.OutputTokens += resp.Usage.OutputTokens
+		model = respModel
+		totalUsage.InputTokens += usage.InputTokens
+		totalUsage.OutputTokens += usage.OutputTokens
+		finalText.WriteString(textContent)
 
-		// Extract text and tool_use blocks from response
-		var textContent strings.Builder
-		var toolUseBlocks []ContentBlock
-
-		for _, block := range resp.Content {
-			switch block.Type {
-			case "text":
-				textContent.WriteString(block.Text)
-				if callback != nil {
-					callback(block.Text)
-				}
-			case "tool_use":
-				toolUseBlocks = append(toolUseBlocks, ContentBlock{
-					Type:  "tool_use",
-					ID:    block.ID,
-					Name:  block.Name,
-					Input: block.Input,
-				})
-			}
-		}
-
-		finalText.WriteString(textContent.String())
-
-		// If stop_reason is not "tool_use", we're done
-		if resp.StopReason != "tool_use" || len(toolUseBlocks) == 0 {
+		if stopReason != "tool_use" || len(toolUseBlocks) == 0 {
 			log.Printf("📥 [anthropic/agentic] final response (iteration %d, %d chars)", iteration+1, finalText.Len())
 			break
 		}
 
-		// Add assistant message with tool_use blocks to conversation
+		// Build assistant content blocks for conversation history
+		var assistantContent []ContentBlock
+		if textContent != "" {
+			assistantContent = append(assistantContent, ContentBlock{Type: "text", Text: textContent})
+		}
+		assistantContent = append(assistantContent, toolUseBlocks...)
+
 		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
 			Role:    "assistant",
-			Content: resp.Content, // Include all content blocks
+			Content: assistantContent,
 		})
 
-		// Execute each tool and collect results
+		// Execute tools
 		var toolResults []ContentBlock
 		for _, toolUse := range toolUseBlocks {
-			// Parse input JSON
 			var input map[string]any
 			if err := json.Unmarshal(toolUse.Input, &input); err != nil {
 				input = make(map[string]any)
 			}
 
-			// Execute tool
 			log.Printf("🔧 [tool] executing %s", toolUse.Name)
-
 			result, err := executor(toolUse.Name, input)
 			if err != nil {
 				result = fmt.Sprintf("Error: %v", err)
@@ -577,7 +566,6 @@ func (c *AnthropicClient) ChatWithTools(
 			})
 		}
 
-		// Add user message with tool results
 		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
 			Role:    "user",
 			Content: toolResults,
@@ -589,6 +577,128 @@ func (c *AnthropicClient) ChatWithTools(
 		Model: model,
 		Usage: totalUsage,
 	}, nil
+}
+
+// callAPIStreamTools makes a streaming API call and returns parsed text, tool_use blocks, model, usage, and stop_reason.
+func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback StreamCallback) (
+	text string, toolUseBlocks []ContentBlock, model string, usage types.Usage, stopReason string, err error,
+) {
+	bodyData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", nil, "", types.Usage{}, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
+	if err != nil {
+		return "", nil, "", types.Usage{}, "", fmt.Errorf("failed to create request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", nil, "", types.Usage{}, "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		var errResp anthropicErrorWrapper
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			return "", nil, "", types.Usage{}, "", fmt.Errorf("anthropic API error: %s (%s)", errResp.Error.Message, errResp.Error.Type)
+		}
+		return "", nil, "", types.Usage{}, "", fmt.Errorf("anthropic API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse SSE stream, tracking current content block
+	var fullText strings.Builder
+	var currentBlockType string   // "text" or "tool_use"
+	var currentToolID string
+	var currentToolName string
+	var currentToolInput strings.Builder
+
+	scanner := bufio.NewScanner(resp.Body)
+	// Increase buffer for large SSE events
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			continue
+		}
+
+		event, parseErr := parseSSEEvent(data)
+		if parseErr != nil {
+			log.Printf("⚠️ Failed to parse SSE event: %v", parseErr)
+			continue
+		}
+
+		switch event.Type {
+		case "message_start":
+			if event.Message != nil {
+				model = event.Message.Model
+				if event.Message.Usage != nil {
+					usage.InputTokens = event.Message.Usage.InputTokens
+				}
+			}
+
+		case "content_block_start":
+			if event.ContentBlock != nil {
+				currentBlockType = event.ContentBlock.Type
+				if currentBlockType == "tool_use" {
+					currentToolID = event.ContentBlock.ID
+					currentToolName = event.ContentBlock.Name
+					currentToolInput.Reset()
+				}
+			}
+
+		case "content_block_delta":
+			if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
+				fullText.WriteString(event.Delta.Text)
+				if callback != nil {
+					callback(event.Delta.Text)
+				}
+			} else if event.Delta.Type == "input_json_delta" && event.Delta.PartialJSON != "" {
+				currentToolInput.WriteString(event.Delta.PartialJSON)
+			}
+
+		case "content_block_stop":
+			if currentBlockType == "tool_use" {
+				inputJSON := currentToolInput.String()
+				if inputJSON == "" {
+					inputJSON = "{}"
+				}
+				toolUseBlocks = append(toolUseBlocks, ContentBlock{
+					Type:  "tool_use",
+					ID:    currentToolID,
+					Name:  currentToolName,
+					Input: json.RawMessage(inputJSON),
+				})
+			}
+			currentBlockType = ""
+
+		case "message_delta":
+			if event.Delta.StopReason != "" {
+				stopReason = event.Delta.StopReason
+			}
+			if event.Usage != nil {
+				usage.OutputTokens = event.Usage.OutputTokens
+			}
+		}
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		return "", nil, "", types.Usage{}, "", fmt.Errorf("error reading stream: %w", scanErr)
+	}
+
+	text = fullText.String()
+	return text, toolUseBlocks, model, usage, stopReason, nil
 }
 
 // callAPI makes a single API call to Anthropic (non-streaming)
