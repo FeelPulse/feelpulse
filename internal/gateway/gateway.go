@@ -43,7 +43,7 @@ func (gw *Gateway) Start() error {
 	defer cancel()
 
 	// Initialize agent router if configured
-	if gw.cfg.Agent.APIKey != "" {
+	if gw.cfg.Agent.APIKey != "" || gw.cfg.Agent.AuthToken != "" {
 		router, err := agent.NewRouter(gw.cfg)
 		if err != nil {
 			log.Printf("⚠️  Agent not configured: %v", err)
