@@ -403,7 +403,20 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 }
 
 // handleMessageStreaming processes messages with streaming support for Telegram
-func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (*types.Message, error) {
+func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (reply *types.Message, err error) {
+	// Panic recovery - ensure we don't crash from unexpected panics
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌ panic in handleMessageStreaming: %v", r)
+			reply = &types.Message{
+				Text:    "❌ An unexpected error occurred. Please try again.",
+				Channel: msg.Channel,
+				IsBot:   true,
+			}
+			err = nil // Return gracefully instead of crashing
+		}
+	}()
+
 	// Register user for heartbeat (if enabled)
 	if gw.heartbeat != nil {
 		if uid, ok := gw.getUserIDInt64(msg); ok {
@@ -462,7 +475,7 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	}
 
 	// Route to agent with streaming callback
-	reply, err := router.ProcessWithHistoryStream(history, agent.StreamCallback(onDelta))
+	reply, err = router.ProcessWithHistoryStream(history, agent.StreamCallback(onDelta))
 	if err != nil {
 		log.Printf("❌ Agent error: %v", err)
 		return &types.Message{
@@ -479,7 +492,20 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 }
 
 // handleMessage processes incoming messages from channels
-func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
+func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err error) {
+	// Panic recovery - ensure we don't crash from unexpected panics
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌ panic in handleMessage: %v", r)
+			reply = &types.Message{
+				Text:    "❌ An unexpected error occurred. Please try again.",
+				Channel: msg.Channel,
+				IsBot:   true,
+			}
+			err = nil // Return gracefully instead of crashing
+		}
+	}()
+
 	// Register user for heartbeat (if enabled)
 	if gw.heartbeat != nil {
 		if uid, ok := gw.getUserIDInt64(msg); ok {
@@ -538,7 +564,7 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 	}
 
 	// Route to agent with full history
-	reply, err := router.ProcessWithHistory(history)
+	reply, err = router.ProcessWithHistory(history)
 	if err != nil {
 		log.Printf("❌ Agent error: %v", err)
 		return &types.Message{

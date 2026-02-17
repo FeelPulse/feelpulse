@@ -17,9 +17,10 @@ func TestBotCommandsList(t *testing.T) {
 		{Command: "profile", Description: "Switch bot personality"},
 		{Command: "tts", Description: "Toggle text-to-speech"},
 		{Command: "skills", Description: "List loaded AI tools"},
+		{Command: "remind", Description: "Set a reminder"},
 		{Command: "reminders", Description: "List active reminders"},
 		{Command: "cancel", Description: "Cancel a reminder"},
-		{Command: "usage", Description: "Show token usage stats"},
+		{Command: "usage", Description: "Show token usage & context"},
 		{Command: "help", Description: "Show all commands"},
 	}
 	

@@ -499,7 +499,8 @@ func (h *Handler) handleHelp() string {
 
 📝 *Conversation*
   /new — Start a new conversation
-  /history — Show recent messages
+  /clear — Alias for /new
+  /history [N] — Show recent messages (default 10)
   /export — Export conversation as .txt file
 
 🤖 *AI Model*
@@ -510,8 +511,10 @@ func (h *Handler) handleHelp() string {
   /profile — Show current profile
   /profile list — List available profiles
   /profile use <name> — Switch profile
+  /profile reset — Reset to default
 
 🔊 *Voice*
+  /tts — Show TTS status
   /tts on — Enable text-to-speech
   /tts off — Disable text-to-speech
 
@@ -520,12 +523,11 @@ func (h *Handler) handleHelp() string {
 
 ⏰ *Reminders*
   /remind in <time> <msg> — Set reminder
-  /remind at <HH:MM> <msg> — Set reminder at time
   /reminders — List active reminders
   /cancel <id> — Cancel a reminder
 
 📊 *Stats*
-  /usage — Show token usage
+  /usage — Show token usage & context
 
 ❓ *Help*
   /help — Show this message
