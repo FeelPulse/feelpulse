@@ -1415,20 +1415,28 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm", minutes)
 }
 
+// checkAuth verifies the Authorization header against the configured hooks token.
+// Returns true if authorized (or no auth required). Writes 401 and returns false if unauthorized.
+func (gw *Gateway) checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	if gw.cfg.Hooks.Token == "" {
+		return true // no auth configured
+	}
+	token := r.Header.Get("Authorization")
+	if token != "Bearer "+gw.cfg.Hooks.Token {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
 func (gw *Gateway) handleHook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Auth check
-	if gw.cfg.Hooks.Token != "" {
-		token := r.Header.Get("Authorization")
-		expected := "Bearer " + gw.cfg.Hooks.Token
-		if token != expected {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !gw.checkAuth(w, r) {
+		return
 	}
 
 	var body map[string]any
@@ -1449,6 +1457,10 @@ func (gw *Gateway) handleHook(w http.ResponseWriter, r *http.Request) {
 
 // handleMetrics returns Prometheus-compatible metrics
 func (gw *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if !gw.checkAuth(w, r) {
+		return
+	}
+
 	// Update active sessions count before returning metrics
 	gw.metrics.SetActiveSessions(gw.sessions.Count())
 

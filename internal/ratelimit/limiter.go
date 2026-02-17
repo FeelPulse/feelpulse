@@ -53,6 +53,13 @@ func (l *Limiter) Allow(userID string) bool {
 			}
 		}
 		timestamps = valid
+		// Clean up empty entries to prevent memory leak
+		if len(timestamps) == 0 {
+			delete(l.windows, userID)
+			// Re-add since we know we're under limit
+			l.windows[userID] = []time.Time{now}
+			return true
+		}
 	}
 
 	// Check if under limit

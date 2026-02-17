@@ -68,14 +68,8 @@ type OpenAIErrorResponse struct {
 
 // handleOpenAIChatCompletion handles POST /v1/chat/completions
 func (gw *Gateway) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Request) {
-	// Auth check (using same token as hooks)
-	if gw.cfg.Hooks.Token != "" {
-		token := r.Header.Get("Authorization")
-		expected := "Bearer " + gw.cfg.Hooks.Token
-		if token != expected {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !gw.checkAuth(w, r) {
+		return
 	}
 
 	// Check method
@@ -120,9 +114,6 @@ func (gw *Gateway) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Req
 	model := mapToAnthropicModel(req.Model)
 	gw.log.Info("📡 OpenAI API: model=%s → %s, messages=%d", req.Model, model, len(messages))
 
-	// Track metrics
-	gw.metrics.IncrementMessages("api")
-
 	// Process with the agent
 	reply, err := router.ProcessWithHistory(messages)
 	if err != nil {
@@ -131,8 +122,11 @@ func (gw *Gateway) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Track metrics for OpenAI-compat endpoint
+	gw.metrics.IncrementMessages("openai-compat")
+
 	// Track token usage
-	if reply.Metadata != nil {
+	if reply != nil && reply.Metadata != nil {
 		if input, ok := reply.Metadata["input_tokens"].(int); ok {
 			if output, ok := reply.Metadata["output_tokens"].(int); ok {
 				gw.metrics.AddTokens(input, output)
