@@ -526,11 +526,22 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 	if reply != nil && reply.Text != "" {
 		parts := SplitLongMessage(reply.Text, SafeMessageLength)
 		
-		// First part: edit the thinking message
-		if err := t.EditMessageText(chatID, thinkingMsgID, parts[0], nil); err != nil {
-			log.Printf("⚠️ Failed to send final message update: %v", err)
-			// Try sending as new message
-			_ = t.SendMessage(chatID, parts[0], true)
+		// First part: edit the thinking message (skip if content unchanged)
+		mu.Lock()
+		lastText := accumulated.String()
+		mu.Unlock()
+		
+		displayPart := parts[0]
+		if len(displayPart) > 4000 {
+			displayPart = displayPart[:4000] + "..."
+		}
+		
+		// Only edit if the final text differs from what's already displayed
+		if displayPart != lastText && (len(lastText) <= 4000 || displayPart != lastText[:4000]+"...") {
+			if err := t.EditMessageText(chatID, thinkingMsgID, parts[0], nil); err != nil {
+				log.Printf("⚠️ Failed to send final message update: %v", err)
+				_ = t.SendMessage(chatID, parts[0], true)
+			}
 		}
 		
 		// Additional parts: send as new messages
