@@ -222,15 +222,15 @@ class Manager {
   +BuildSystemPrompt(base string) string
 }
 
-folder "~/.feelpulse/workspace/" {
-  file "SOUL.md\n(persona / AI identity)"
-  file "USER.md\n(user context)"
-  file "MEMORY.md\n(long-term memory)"
+rectangle "Workspace Files\n(~/.feelpulse/workspace/)" as WS #lightyellow {
+  rectangle "SOUL.md\n(persona / AI identity)" as SOUL #fff2cc
+  rectangle "USER.md\n(user context)" as USERF #fff2cc
+  rectangle "MEMORY.md\n(long-term memory)" as MEMF #fff2cc
 }
 
-Manager --> "SOUL.md" : reads
-Manager --> "USER.md" : reads
-Manager --> "MEMORY.md" : reads
+Manager --> SOUL : reads
+Manager --> USERF : reads
+Manager --> MEMF : reads
 @enduml
 ```
 
@@ -264,14 +264,12 @@ class Tool {
   +Handler func(ctx, params) string
 }
 
-package "Built-in Tools" {
-  component [web_search\nDuckDuckGo / Brave] as WS
-  component [exec\nRun shell commands] as EX
-}
+rectangle "web_search\n(DuckDuckGo / Brave)" as WS #dae8fc
+rectangle "exec\n(Run shell commands)" as EX #dae8fc
 
 Registry "1" --> "*" Tool
-Tool --> WS
-Tool --> EX
+Tool --> WS : built-in
+Tool --> EX : built-in
 @enduml
 ```
 

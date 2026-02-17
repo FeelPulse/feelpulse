@@ -242,10 +242,10 @@ component "Compactor\nsession/compact.go\n\nEstimate tokens: len/4\nIf > thresho
 
 component "Memory Manager\nmemory/memory.go\n\nLoads on startup.\nReloads on config change.\nBuilds layered prompt." as MEM
 
-folder "~/.feelpulse/workspace/" {
-  file "SOUL.md\nPersona & identity\nReplaces base system\nprompt if present" as SOUL
-  file "USER.md\nUser context:\nname, timezone, prefs\nAppended to prompt" as USER_F
-  file "MEMORY.md\nLong-term memories:\ndecisions, events\nAppended to prompt" as MEM_F
+rectangle "Workspace Files\n(~/.feelpulse/workspace/)" as WORKSPACE #lightyellow {
+  rectangle "SOUL.md\nPersona & identity\nReplaces base system\nprompt if present" as SOUL #fff2cc
+  rectangle "USER.md\nUser context:\nname, timezone, prefs\nAppended to prompt" as USER_F #fff2cc
+  rectangle "MEMORY.md\nLong-term memories:\ndecisions, events\nAppended to prompt" as MEM_F #fff2cc
 }
 
 MAP "1" --> "*" SESS_OBJ
