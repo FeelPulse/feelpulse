@@ -99,12 +99,6 @@ type AgentConfig struct {
 
 type ChannelsConfig struct {
 	Telegram TelegramConfig `yaml:"telegram"`
-	Discord  DiscordConfig  `yaml:"discord"`
-}
-
-type DiscordConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	BotToken string `yaml:"token"`
 }
 
 type TelegramConfig struct {
@@ -231,13 +225,6 @@ func (c *Config) Validate() *ValidationResult {
 	if c.Channels.Telegram.Enabled {
 		if c.Channels.Telegram.BotToken == "" {
 			result.Errors = append(result.Errors, "Telegram enabled but token not set: set channels.telegram.token")
-		}
-	}
-
-	// Check Discord configuration
-	if c.Channels.Discord.Enabled {
-		if c.Channels.Discord.BotToken == "" {
-			result.Errors = append(result.Errors, "Discord enabled but token not set: set channels.discord.token")
 		}
 	}
 

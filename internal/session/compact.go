@@ -2,6 +2,7 @@ package session
 
 import (
 	"time"
+	"unicode/utf8"
 
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -40,9 +41,17 @@ func NewCompactor(summarizer Summarizer, maxTokens int, keepLastN int) *Compacto
 	}
 }
 
-// EstimateTokens estimates the token count for a string (len/4 approximation)
+// EstimateTokens estimates the token count for a string
+// Better estimate: count runes (handles CJK properly)
+// CJK characters ≈ 1-2 tokens each, ASCII ≈ 4 chars/token
 func EstimateTokens(text string) int {
-	return len(text) / 4
+	runeCount := utf8.RuneCountInString(text)
+	byteCount := len(text)
+	// If mostly multi-byte (CJK), use rune count; otherwise bytes/4
+	if byteCount > runeCount*2 {
+		return runeCount // CJK-heavy: ~1 token per character
+	}
+	return byteCount / 4 // ASCII-heavy: ~4 chars per token
 }
 
 // EstimateHistoryTokens estimates total tokens in a message history

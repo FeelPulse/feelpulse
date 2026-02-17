@@ -68,13 +68,23 @@ type OpenAIErrorResponse struct {
 
 // handleOpenAIChatCompletion handles POST /v1/chat/completions
 func (gw *Gateway) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Request) {
+	// Auth check (using same token as hooks)
+	if gw.cfg.Hooks.Token != "" {
+		token := r.Header.Get("Authorization")
+		expected := "Bearer " + gw.cfg.Hooks.Token
+		if token != expected {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	// Check method
 	if r.Method != http.MethodPost {
 		gw.writeOpenAIError(w, http.StatusMethodNotAllowed, "Method not allowed", "invalid_request_error")
 		return
 	}
 
-	// Check auth
+	// Legacy auth check (for backward compatibility with more detailed error)
 	if gw.cfg.Hooks.Token != "" {
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {

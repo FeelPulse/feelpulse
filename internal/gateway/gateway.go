@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -57,7 +58,7 @@ type Gateway struct {
 	log             *logger.Logger
 	metrics        *metrics.Collector
 	startTime      time.Time
-	lastMessageAt  time.Time
+	lastMessageAt  atomic.Int64 // Unix nanoseconds of last message
 	cancelCtx      context.CancelFunc
 	activeRequests sync.WaitGroup // tracks in-flight message processing
 	shutdownCh     chan struct{}  // signals shutdown in progress
@@ -747,12 +748,7 @@ func (gw *Gateway) sendSubAgentNotification(sessionKey, message string) {
 
 // parseSessionKey splits "channel:userID" into parts
 func parseSessionKey(key string) []string {
-	for i := 0; i < len(key); i++ {
-		if key[i] == ':' {
-			return []string{key[:i], key[i+1:]}
-		}
-	}
-	return []string{key}
+	return strings.SplitN(key, ":", 2)
 }
 
 // subAgentPersisterAdapter wraps SQLiteStore to implement subagent.Persister
@@ -1081,6 +1077,7 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 
 	// Update commands handler with new config
 	gw.commands = command.NewHandler(gw.sessions, newCfg)
+	gw.wireCommandHandler()
 
 	// Update rate limiter if changed
 	if oldCfg.Agent.RateLimit != newCfg.Agent.RateLimit {
@@ -1093,27 +1090,34 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 	}
 }
 
-// handleMessageStreaming processes messages with streaming support for Telegram
-func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (reply *types.Message, err error) {
+// messageProcessingContext holds state for message processing
+type messageProcessingContext struct {
+	userID    string
+	reqLog    *logger.ContextLogger
+	router    *agent.Router
+	history   []types.Message
+}
+
+// prepareMessageProcessing handles common setup for message processing.
+// Returns a context for further processing, or an early reply if processing should stop.
+func (gw *Gateway) prepareMessageProcessing(msg *types.Message) (*messageProcessingContext, *types.Message) {
 	// Track active request for graceful shutdown
 	gw.activeRequests.Add(1)
-	defer gw.activeRequests.Done()
 
 	// Check if shutting down
 	select {
 	case <-gw.shutdownCh:
-		return &types.Message{
+		gw.activeRequests.Done()
+		return nil, &types.Message{
 			Text:    "⏳ Service is shutting down. Please try again in a moment.",
 			Channel: msg.Channel,
 			IsBot:   true,
-		}, nil
+		}
 	default:
 	}
 
-	// Update last message timestamp
-	gw.mu.Lock()
-	gw.lastMessageAt = time.Now()
-	gw.mu.Unlock()
+	// Update last message timestamp (atomic, no lock needed)
+	gw.lastMessageAt.Store(time.Now().UnixNano())
 
 	// Track message in metrics
 	gw.metrics.IncrementMessages(msg.Channel)
@@ -1121,19 +1125,6 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 
 	userID := gw.getUserID(msg)
 	reqLog := gw.log.WithComponent("message").WithRequestID(userID)
-
-	// Panic recovery - ensure we don't crash from unexpected panics
-	defer func() {
-		if r := recover(); r != nil {
-			reqLog.Error("panic in handleMessageStreaming: %v", r)
-			reply = &types.Message{
-				Text:    "❌ An unexpected error occurred. Please try again.",
-				Channel: msg.Channel,
-				IsBot:   true,
-			}
-			err = nil // Return gracefully instead of crashing
-		}
-	}()
 
 	reqLog.Info("Processing message from %s", msg.From)
 
@@ -1144,19 +1135,22 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 		}
 	}
 
-	// Check for slash commands first (exempt from rate limiting) - no streaming for commands
+	// Check for slash commands first (exempt from rate limiting)
 	if command.IsCommand(msg.Text) {
-		return gw.commands.Handle(msg)
+		gw.activeRequests.Done()
+		reply, _ := gw.commands.Handle(msg)
+		return nil, reply
 	}
 
 	// Check rate limit
 	if !gw.limiter.Allow(userID) {
 		reqLog.Info("Rate limited")
-		return &types.Message{
+		gw.activeRequests.Done()
+		return nil, &types.Message{
 			Text:    "⏱ Rate limit exceeded. Please wait a moment.",
 			Channel: msg.Channel,
 			IsBot:   true,
-		}, nil
+		}
 	}
 
 	// Get router with read lock (safe during hot reload)
@@ -1166,11 +1160,12 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	gw.mu.RUnlock()
 
 	if router == nil {
-		return &types.Message{
+		gw.activeRequests.Done()
+		return nil, &types.Message{
 			Text:    "🔧 AI agent not configured. Set your API key in config.yaml",
 			Channel: msg.Channel,
 			IsBot:   true,
-		}, nil
+		}
 	}
 
 	// Get session
@@ -1204,16 +1199,17 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 		gw.usage.UpdateContextWindow(msg.Channel, userID, contextTokens, maxContextTokens)
 	}
 
-	// Route to agent with streaming callback
-	reply, err = router.ProcessWithHistoryStream(history, agent.StreamCallback(onDelta))
-	if err != nil {
-		reqLog.Error("Agent error: %v", err)
-		return &types.Message{
-			Text:    "❌ Sorry, I encountered an error processing your message.",
-			Channel: msg.Channel,
-			IsBot:   true,
-		}, nil
-	}
+	return &messageProcessingContext{
+		userID:  userID,
+		reqLog:  reqLog,
+		router:  router,
+		history: history,
+	}, nil
+}
+
+// finalizeMessageProcessing handles post-processing after agent response
+func (gw *Gateway) finalizeMessageProcessing(msg *types.Message, ctx *messageProcessingContext, reply *types.Message) {
+	defer gw.activeRequests.Done()
 
 	// Track token usage in metrics
 	if reply.Metadata != nil {
@@ -1225,126 +1221,35 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	}
 
 	// Add bot reply to session history (and persist)
-	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *reply)
-
-	return reply, nil
+	gw.sessions.AddMessageAndPersist(msg.Channel, ctx.userID, *reply)
 }
 
-// handleMessage processes incoming messages from channels
-func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err error) {
-	// Track active request for graceful shutdown
-	gw.activeRequests.Add(1)
-	defer gw.activeRequests.Done()
-
-	// Check if shutting down
-	select {
-	case <-gw.shutdownCh:
-		return &types.Message{
-			Text:    "⏳ Service is shutting down. Please try again in a moment.",
-			Channel: msg.Channel,
-			IsBot:   true,
-		}, nil
-	default:
+// handleMessageStreaming processes messages with streaming support for Telegram
+func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (reply *types.Message, err error) {
+	ctx, earlyReply := gw.prepareMessageProcessing(msg)
+	if earlyReply != nil {
+		return earlyReply, nil
 	}
-
-	// Update last message timestamp
-	gw.mu.Lock()
-	gw.lastMessageAt = time.Now()
-	gw.mu.Unlock()
-
-	// Track message in metrics
-	gw.metrics.IncrementMessages(msg.Channel)
-	gw.metrics.SetActiveSessions(gw.sessions.Count())
-
-	userID := gw.getUserID(msg)
-	reqLog := gw.log.WithComponent("message").WithRequestID(userID)
 
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
 		if r := recover(); r != nil {
-			reqLog.Error("panic in handleMessage: %v", r)
+			ctx.reqLog.Error("panic in handleMessageStreaming: %v", r)
 			reply = &types.Message{
 				Text:    "❌ An unexpected error occurred. Please try again.",
 				Channel: msg.Channel,
 				IsBot:   true,
 			}
 			err = nil // Return gracefully instead of crashing
+			gw.activeRequests.Done()
 		}
 	}()
 
-	reqLog.Info("Processing message from %s", msg.From)
-
-	// Register user for heartbeat (if enabled)
-	if gw.heartbeat != nil {
-		if uid, ok := gw.getUserIDInt64(msg); ok {
-			gw.heartbeat.RegisterUser(msg.Channel, uid)
-		}
-	}
-
-	// Check for slash commands first (exempt from rate limiting)
-	if command.IsCommand(msg.Text) {
-		return gw.commands.Handle(msg)
-	}
-
-	// Check rate limit
-	if !gw.limiter.Allow(userID) {
-		reqLog.Info("Rate limited")
-		return &types.Message{
-			Text:    "⏱ Rate limit exceeded. Please wait a moment.",
-			Channel: msg.Channel,
-			IsBot:   true,
-		}, nil
-	}
-
-	// Get router with read lock (safe during hot reload)
-	gw.mu.RLock()
-	router := gw.router
-	compactor := gw.compactor
-	gw.mu.RUnlock()
-
-	if router == nil {
-		return &types.Message{
-			Text:    "🔧 AI agent not configured. Set your API key in config.yaml",
-			Channel: msg.Channel,
-			IsBot:   true,
-		}, nil
-	}
-
-	// Get session (userID already extracted above for rate limiting)
-	sess := gw.sessions.GetOrCreate(msg.Channel, userID)
-
-	// Add incoming message to session history (and persist)
-	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *msg)
-
-	// Get conversation history for agent
-	history := sess.GetAllMessages()
-
-	// Compact history if needed (summarize old messages)
-	maxContextTokens := session.DefaultMaxContextTokens
-	if compactor != nil {
-		compacted, err := compactor.CompactIfNeeded(history)
-		if err != nil {
-			reqLog.Warn("Compaction failed: %v (using full history)", err)
-		} else if len(compacted) < len(history) {
-			reqLog.Info("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
-			history = compacted
-			// Track compaction
-			if gw.usage != nil {
-				gw.usage.RecordCompaction(msg.Channel, userID)
-			}
-		}
-	}
-
-	// Track context window usage
-	if gw.usage != nil {
-		contextTokens := session.EstimateHistoryTokens(history)
-		gw.usage.UpdateContextWindow(msg.Channel, userID, contextTokens, maxContextTokens)
-	}
-
-	// Route to agent with full history
-	reply, err = router.ProcessWithHistory(history)
+	// Route to agent with streaming callback
+	reply, err = ctx.router.ProcessWithHistoryStream(ctx.history, agent.StreamCallback(onDelta))
 	if err != nil {
-		reqLog.Error("Agent error: %v", err)
+		ctx.reqLog.Error("Agent error: %v", err)
+		gw.activeRequests.Done()
 		return &types.Message{
 			Text:    "❌ Sorry, I encountered an error processing your message.",
 			Channel: msg.Channel,
@@ -1352,18 +1257,44 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 		}, nil
 	}
 
-	// Track token usage in metrics
-	if reply.Metadata != nil {
-		if input, ok := reply.Metadata["input_tokens"].(int); ok {
-			if output, ok := reply.Metadata["output_tokens"].(int); ok {
-				gw.metrics.AddTokens(input, output)
-			}
-		}
+	gw.finalizeMessageProcessing(msg, ctx, reply)
+	return reply, nil
+}
+
+// handleMessage processes incoming messages from channels
+func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err error) {
+	ctx, earlyReply := gw.prepareMessageProcessing(msg)
+	if earlyReply != nil {
+		return earlyReply, nil
 	}
 
-	// Add bot reply to session history (and persist)
-	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *reply)
+	// Panic recovery - ensure we don't crash from unexpected panics
+	defer func() {
+		if r := recover(); r != nil {
+			ctx.reqLog.Error("panic in handleMessage: %v", r)
+			reply = &types.Message{
+				Text:    "❌ An unexpected error occurred. Please try again.",
+				Channel: msg.Channel,
+				IsBot:   true,
+			}
+			err = nil // Return gracefully instead of crashing
+			gw.activeRequests.Done()
+		}
+	}()
 
+	// Route to agent with full history
+	reply, err = ctx.router.ProcessWithHistory(ctx.history)
+	if err != nil {
+		ctx.reqLog.Error("Agent error: %v", err)
+		gw.activeRequests.Done()
+		return &types.Message{
+			Text:    "❌ Sorry, I encountered an error processing your message.",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
+	}
+
+	gw.finalizeMessageProcessing(msg, ctx, reply)
 	return reply, nil
 }
 
@@ -1412,8 +1343,14 @@ func (gw *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	router := gw.router
 	telegram := gw.telegram
 	browser := gw.browser
-	lastMsg := gw.lastMessageAt
 	gw.mu.RUnlock()
+
+	// Read last message time atomically
+	lastMsgNano := gw.lastMessageAt.Load()
+	var lastMsg time.Time
+	if lastMsgNano > 0 {
+		lastMsg = time.Unix(0, lastMsgNano)
+	}
 
 	// Calculate uptime
 	uptime := time.Since(gw.startTime)

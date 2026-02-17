@@ -30,6 +30,10 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// Enable WAL mode for better concurrent write performance
+	db.Exec("PRAGMA journal_mode=WAL")
+	db.Exec("PRAGMA busy_timeout=5000")
+
 	// Create table if not exists
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS sessions (

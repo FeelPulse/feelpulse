@@ -50,9 +50,6 @@ func detectEnabledFeatures() []string {
 	if cfg.Channels.Telegram.Enabled {
 		features = append(features, "telegram")
 	}
-	if cfg.Channels.Discord.Enabled {
-		features = append(features, "discord")
-	}
 	if cfg.Browser.Enabled {
 		features = append(features, "browser")
 	}

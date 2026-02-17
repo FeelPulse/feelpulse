@@ -189,6 +189,21 @@ func (c *AnthropicClient) AuthModeName() string {
 	return "api-key"
 }
 
+// setHeaders sets the common HTTP headers for Anthropic API requests
+func (c *AnthropicClient) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", anthropicAPIVersion)
+	if c.authMode == AuthModeOAuth {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
+		req.Header.Set("x-app", "cli")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+	} else {
+		req.Header.Set("x-api-key", c.apiKey)
+	}
+}
+
 // DefaultSystemPrompt is the default system prompt for FeelPulse
 const DefaultSystemPrompt = "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful."
 
@@ -277,20 +292,7 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", anthropicAPIVersion)
-
-	if c.authMode == AuthModeOAuth {
-		// Subscription auth: mimic Claude Code headers
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
-		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
-		req.Header.Set("x-app", "cli")
-		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-	} else {
-		// Standard API key auth
-		req.Header.Set("x-api-key", c.apiKey)
-	}
+	c.setHeaders(req)
 
 	// Send request
 	resp, err := c.client.Do(req)
@@ -328,7 +330,7 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		}
 	}
 
-	log.Printf("📥 [anthropic] response: %s", text)
+	log.Printf("📥 [anthropic] response received (%d chars)", len(text))
 
 	return &types.AgentResponse{
 		Text:  text,
@@ -370,18 +372,7 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", anthropicAPIVersion)
-
-	if c.authMode == AuthModeOAuth {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
-		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
-		req.Header.Set("x-app", "cli")
-		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-	} else {
-		req.Header.Set("x-api-key", c.apiKey)
-	}
+	c.setHeaders(req)
 
 	// Send request
 	resp, err := c.client.Do(req)
@@ -457,7 +448,7 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	}
 
 	text := fullText.String()
-	log.Printf("📥 [anthropic/stream] response: %s", text)
+	log.Printf("📥 [anthropic/stream] response received (%d chars)", len(text))
 
 	return &types.AgentResponse{
 		Text:  text,
@@ -549,7 +540,7 @@ func (c *AnthropicClient) ChatWithTools(
 
 		// If stop_reason is not "tool_use", we're done
 		if resp.StopReason != "tool_use" || len(toolUseBlocks) == 0 {
-			log.Printf("📥 [anthropic/agentic] final response (iteration %d): %s", iteration+1, finalText.String())
+			log.Printf("📥 [anthropic/agentic] final response (iteration %d, %d chars)", iteration+1, finalText.Len())
 			break
 		}
 
@@ -569,14 +560,14 @@ func (c *AnthropicClient) ChatWithTools(
 			}
 
 			// Execute tool
-			log.Printf("🔧 [tool] %s(%s)", toolUse.Name, truncateJSON(toolUse.Input, 100))
+			log.Printf("🔧 [tool] executing %s", toolUse.Name)
 
 			result, err := executor(toolUse.Name, input)
 			if err != nil {
 				result = fmt.Sprintf("Error: %v", err)
 				log.Printf("🔧 [tool] %s → error: %v", toolUse.Name, err)
 			} else {
-				log.Printf("🔧 [tool] %s → %s", toolUse.Name, truncateString(result, 100))
+				log.Printf("🔧 [tool] %s → success (%d chars)", toolUse.Name, len(result))
 			}
 
 			toolResults = append(toolResults, ContentBlock{
@@ -612,18 +603,7 @@ func (c *AnthropicClient) callAPI(reqBody AnthropicRequest) (*AnthropicResponse,
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", anthropicAPIVersion)
-
-	if c.authMode == AuthModeOAuth {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
-		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
-		req.Header.Set("x-app", "cli")
-		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-	} else {
-		req.Header.Set("x-api-key", c.apiKey)
-	}
+	c.setHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
