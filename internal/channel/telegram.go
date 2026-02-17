@@ -214,6 +214,11 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	log.Printf("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
 
+	// Send typing indicator
+	if err := t.SendTypingAction(tgMsg.Chat.ID); err != nil {
+		log.Printf("⚠️ Failed to send typing action: %v", err)
+	}
+
 	// Call handler
 	reply, err := t.handler(msg)
 	if err != nil {
@@ -240,6 +245,17 @@ func (t *TelegramBot) SendMessage(chatID int64, text string, markdown bool) erro
 	}
 
 	_, err := t.call("sendMessage", params)
+	return err
+}
+
+// SendTypingAction sends a "typing" indicator to the chat
+func (t *TelegramBot) SendTypingAction(chatID int64) error {
+	params := map[string]any{
+		"chat_id": chatID,
+		"action":  "typing",
+	}
+
+	_, err := t.call("sendChatAction", params)
 	return err
 }
 
