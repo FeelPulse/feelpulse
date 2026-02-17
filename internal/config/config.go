@@ -31,6 +31,12 @@ type AgentConfig struct {
 
 type ChannelsConfig struct {
 	Telegram TelegramConfig `yaml:"telegram"`
+	Discord  DiscordConfig  `yaml:"discord"`
+}
+
+type DiscordConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	BotToken string `yaml:"token"`
 }
 
 type TelegramConfig struct {
