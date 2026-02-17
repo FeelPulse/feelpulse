@@ -22,16 +22,26 @@ type TelegramBot struct {
 	client  *http.Client
 	offset  int64
 
-	handler func(msg *types.Message) (*types.Message, error)
-	mu      sync.Mutex
-	running bool
-	cancel  context.CancelFunc
+	handler         func(msg *types.Message) (*types.Message, error)
+	callbackHandler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
+	mu              sync.Mutex
+	running         bool
+	cancel          context.CancelFunc
 }
 
 // TelegramUpdate represents a Telegram update from getUpdates
 type TelegramUpdate struct {
-	UpdateID int64           `json:"update_id"`
-	Message  *TelegramMessage `json:"message,omitempty"`
+	UpdateID      int64            `json:"update_id"`
+	Message       *TelegramMessage `json:"message,omitempty"`
+	CallbackQuery *CallbackQuery   `json:"callback_query,omitempty"`
+}
+
+// CallbackQuery represents a callback query from an inline keyboard button press
+type CallbackQuery struct {
+	ID      string           `json:"id"`
+	From    *TelegramUser    `json:"from"`
+	Message *TelegramMessage `json:"message,omitempty"`
+	Data    string           `json:"data,omitempty"`
 }
 
 // TelegramMessage represents a Telegram message
@@ -83,6 +93,11 @@ func (t *TelegramBot) SetHandler(handler func(msg *types.Message) (*types.Messag
 	t.handler = handler
 }
 
+// SetCallbackHandler sets the callback query handler function
+func (t *TelegramBot) SetCallbackHandler(handler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)) {
+	t.callbackHandler = handler
+}
+
 // Start begins polling for updates
 func (t *TelegramBot) Start(ctx context.Context) error {
 	t.mu.Lock()
@@ -105,6 +120,13 @@ func (t *TelegramBot) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to connect to Telegram: %w", err)
 	}
 	log.Printf("📱 Telegram bot connected: @%s", me.Username)
+
+	// Register bot commands menu
+	if err := t.SetMyCommands(); err != nil {
+		log.Printf("⚠️ Failed to set bot commands: %v", err)
+	} else {
+		log.Printf("📋 Bot commands menu registered")
+	}
 
 	// Start polling loop
 	go t.pollLoop(ctx)
@@ -159,7 +181,7 @@ func (t *TelegramBot) poll(ctx context.Context) error {
 	params := map[string]any{
 		"offset":  t.offset,
 		"timeout": 30, // Long polling
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}
 
 	resp, err := t.call("getUpdates", params)
@@ -180,6 +202,10 @@ func (t *TelegramBot) poll(ctx context.Context) error {
 
 		if update.Message != nil && update.Message.Text != "" {
 			t.handleMessage(ctx, update.Message)
+		}
+
+		if update.CallbackQuery != nil {
+			t.handleCallbackQuery(ctx, update.CallbackQuery)
 		}
 	}
 
@@ -227,6 +253,16 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 	}
 
 	if reply != nil && reply.Text != "" {
+		// Check if reply has a keyboard
+		if reply.Keyboard != nil {
+			if keyboard, ok := reply.Keyboard.(InlineKeyboard); ok {
+				if err := t.SendMessageWithKeyboard(tgMsg.Chat.ID, reply.Text, keyboard, true); err != nil {
+					log.Printf("❌ Failed to send reply with keyboard: %v", err)
+				}
+				return
+			}
+		}
+		// No keyboard, send regular message
 		if err := t.SendMessage(tgMsg.Chat.ID, reply.Text, true); err != nil {
 			log.Printf("❌ Failed to send reply: %v", err)
 		}
@@ -302,4 +338,105 @@ func (t *TelegramBot) call(method string, params map[string]any) (*TelegramRespo
 	}
 
 	return &tgResp, nil
+}
+
+// SetMyCommands registers bot commands with Telegram for the "/" menu
+func (t *TelegramBot) SetMyCommands() error {
+	params := map[string]any{
+		"commands": BotCommands(),
+	}
+
+	_, err := t.call("setMyCommands", params)
+	return err
+}
+
+// handleCallbackQuery processes an inline keyboard button press
+func (t *TelegramBot) handleCallbackQuery(ctx context.Context, query *CallbackQuery) {
+	if t.callbackHandler == nil {
+		// Answer with empty response to clear loading state
+		_ = t.AnswerCallbackQuery(query.ID, "")
+		return
+	}
+
+	var chatID int64
+	if query.Message != nil && query.Message.Chat != nil {
+		chatID = query.Message.Chat.ID
+	}
+
+	var userID int64
+	if query.From != nil {
+		userID = query.From.ID
+	}
+
+	action, value := ParseCallbackData(query.Data)
+	log.Printf("📲 Callback: action=%s value=%s from=%d", action, value, userID)
+
+	text, keyboard, err := t.callbackHandler(chatID, userID, action, value)
+	if err != nil {
+		log.Printf("❌ Callback handler error: %v", err)
+		_ = t.AnswerCallbackQuery(query.ID, "Error processing request")
+		return
+	}
+
+	// Answer the callback query to remove loading state
+	_ = t.AnswerCallbackQuery(query.ID, "")
+
+	// If handler returned text, edit the original message
+	if text != "" && query.Message != nil {
+		if err := t.EditMessageText(chatID, query.Message.MessageID, text, keyboard); err != nil {
+			log.Printf("⚠️ Failed to edit message: %v", err)
+			// Fallback to sending a new message
+			if keyboard != nil {
+				_ = t.SendMessageWithKeyboard(chatID, text, *keyboard, true)
+			} else {
+				_ = t.SendMessage(chatID, text, true)
+			}
+		}
+	}
+}
+
+// AnswerCallbackQuery sends a response to a callback query
+func (t *TelegramBot) AnswerCallbackQuery(queryID string, text string) error {
+	params := map[string]any{
+		"callback_query_id": queryID,
+	}
+	if text != "" {
+		params["text"] = text
+	}
+
+	_, err := t.call("answerCallbackQuery", params)
+	return err
+}
+
+// SendMessageWithKeyboard sends a message with an inline keyboard
+func (t *TelegramBot) SendMessageWithKeyboard(chatID int64, text string, keyboard InlineKeyboard, markdown bool) error {
+	params := map[string]any{
+		"chat_id":      chatID,
+		"text":         text,
+		"reply_markup": keyboard,
+	}
+
+	if markdown {
+		params["parse_mode"] = "Markdown"
+	}
+
+	_, err := t.call("sendMessage", params)
+	return err
+}
+
+// EditMessageText edits an existing message
+func (t *TelegramBot) EditMessageText(chatID int64, messageID int64, text string, keyboard *InlineKeyboard) error {
+	params := map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	}
+
+	if keyboard != nil {
+		params["reply_markup"] = keyboard
+	}
+
+	_, err := t.call("editMessageText", params)
+	return err
 }

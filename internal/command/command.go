@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/channel"
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
@@ -84,10 +85,11 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 	userID := getUserID(msg)
 
 	var response string
+	var keyboard any
 
 	switch cmd {
 	case "new", "reset", "clear":
-		response = h.handleNew(msg.Channel, userID)
+		response, keyboard = h.handleNew(msg.Channel, userID)
 	case "history":
 		response = h.handleHistory(msg.Channel, userID, args)
 	case "remind":
@@ -97,9 +99,9 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 	case "usage", "stats":
 		response = h.handleUsage(msg.Channel, userID)
 	case "model":
-		response = h.handleModel(msg.Channel, userID, args)
+		response, keyboard = h.handleModel(msg.Channel, userID, args)
 	case "models":
-		response = h.handleModels()
+		response, keyboard = h.handleModels()
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -107,21 +109,23 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 	}
 
 	return &types.Message{
-		Text:    response,
-		Channel: msg.Channel,
-		IsBot:   true,
+		Text:     response,
+		Channel:  msg.Channel,
+		IsBot:    true,
+		Keyboard: keyboard,
 	}, nil
 }
 
 // handleNew clears the session
-func (h *Handler) handleNew(channel, userID string) string {
-	h.sessions.Delete(channel, userID)
-	return "🔄 Conversation cleared. Starting fresh!"
+func (h *Handler) handleNew(ch, userID string) (string, any) {
+	h.sessions.Delete(ch, userID)
+	keyboard := channel.NewChatKeyboard()
+	return "🔄 *Conversation cleared!* Starting fresh.\n\nSend a message to begin your new conversation.", keyboard
 }
 
 // handleHistory shows recent messages
-func (h *Handler) handleHistory(channel, userID, args string) string {
-	sess, exists := h.sessions.Get(channel, userID)
+func (h *Handler) handleHistory(ch, userID, args string) string {
+	sess, exists := h.sessions.Get(ch, userID)
 	if !exists || sess.Len() == 0 {
 		return "📭 No conversation history yet."
 	}
@@ -170,7 +174,7 @@ func (h *Handler) handleHistory(channel, userID, args string) string {
 }
 
 // handleRemind creates a reminder
-func (h *Handler) handleRemind(channel, userID, args string) string {
+func (h *Handler) handleRemind(ch, userID, args string) string {
 	if h.scheduler == nil {
 		return "❌ Reminders are not enabled."
 	}
@@ -185,7 +189,7 @@ func (h *Handler) handleRemind(channel, userID, args string) string {
 		return fmt.Sprintf("❌ Invalid duration: %s", durationStr)
 	}
 
-	id, err := h.scheduler.AddReminder(channel, userID, duration, message)
+	id, err := h.scheduler.AddReminder(ch, userID, duration, message)
 	if err != nil {
 		return fmt.Sprintf("❌ Failed to create reminder: %v", err)
 	}
@@ -196,12 +200,12 @@ func (h *Handler) handleRemind(channel, userID, args string) string {
 }
 
 // handleReminders lists active reminders
-func (h *Handler) handleReminders(channel, userID string) string {
+func (h *Handler) handleReminders(ch, userID string) string {
 	if h.scheduler == nil {
 		return "❌ Reminders are not enabled."
 	}
 
-	reminders := h.scheduler.List(channel, userID)
+	reminders := h.scheduler.List(ch, userID)
 	if len(reminders) == 0 {
 		return "📭 No active reminders."
 	}
@@ -216,65 +220,99 @@ func (h *Handler) handleReminders(channel, userID string) string {
 }
 
 // handleUsage shows token usage statistics
-func (h *Handler) handleUsage(channel, userID string) string {
+func (h *Handler) handleUsage(ch, userID string) string {
 	if h.usage == nil {
 		return "❌ Usage tracking is not enabled."
 	}
 
-	stats := h.usage.Get(channel, userID)
+	stats := h.usage.Get(ch, userID)
 	return stats.String()
 }
 
 // handleModel switches the model for the current session
-func (h *Handler) handleModel(channel, userID, args string) string {
-	sess := h.sessions.GetOrCreate(channel, userID)
+func (h *Handler) handleModel(ch, userID, args string) (string, any) {
+	sess := h.sessions.GetOrCreate(ch, userID)
+	keyboard := channel.ModelKeyboard()
 	
-	// If no argument, show current model
+	// If no argument, show current model with keyboard
 	if args == "" {
 		current := sess.GetModel()
 		if current == "" {
-			return "🤖 Using default model from config.\n\nTo switch: /model <name>\nList models: /models"
+			return "🤖 *Current Model:* default\n\nSelect a model below or type `/model <name>`:", keyboard
 		}
-		return fmt.Sprintf("🤖 Current model: *%s*\n\nTo switch: /model <name>\nList models: /models", current)
+		return fmt.Sprintf("🤖 *Current Model:* %s\n\nSelect a model below or type `/model <name>`:", channel.FormatModelName(current)), keyboard
 	}
 
 	// Validate and set new model
 	model := strings.TrimSpace(args)
 	if !session.ValidateModel(model) {
-		return fmt.Sprintf("❌ Unknown model: %s\n\nUse /models to see available options.", model)
+		return fmt.Sprintf("❌ Unknown model: %s\n\nUse /models to see available options.", model), nil
 	}
 
 	sess.SetModel(model)
-	return fmt.Sprintf("✅ Model switched to: *%s*", model)
+	return fmt.Sprintf("✅ Model switched to: *%s*", channel.FormatModelName(model)), nil
 }
 
 // handleModels lists available models
-func (h *Handler) handleModels() string {
+func (h *Handler) handleModels() (string, any) {
 	models := session.SupportedModels()
+	keyboard := channel.ModelKeyboard()
 	
 	var sb strings.Builder
 	sb.WriteString("🤖 *Available Models*\n\n")
 	for _, m := range models {
-		sb.WriteString(fmt.Sprintf("  • %s\n", m))
+		sb.WriteString(fmt.Sprintf("  • %s\n", channel.FormatModelName(m)))
 	}
-	sb.WriteString("\nSwitch: /model <name>")
-	return sb.String()
+	sb.WriteString("\nTap a button below or use `/model <name>`:")
+	return sb.String(), keyboard
 }
 
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
-	return `🫀 *FeelPulse Commands*
+	return `🫀 *FeelPulse — AI Chat Assistant*
 
-/new — Start a new conversation (clear history)
-/history [n] — Show last n messages (default: 10)
-/model [name] — Show or switch AI model
-/models — List available models
-/remind in <time> <message> — Set a reminder
-/reminders — List active reminders
-/usage — Show token usage statistics
-/help — Show this help message
+📝 *Conversation*
+  /new — Start a new conversation
+  /history — Show recent messages
 
-Just send a message to chat with the AI!`
+🤖 *AI Model*
+  /model — Show or switch AI model
+  /models — List available models
+
+⏰ *Reminders*
+  /remind in <time> <msg> — Set reminder
+  /reminders — List active reminders
+
+📊 *Stats*
+  /usage — Show token usage
+
+❓ *Help*
+  /help — Show this message
+
+_Just send any message to chat with the AI!_`
+}
+
+// HandleCallback processes inline keyboard button presses
+func (h *Handler) HandleCallback(ch string, userID int64, action, value string) (string, *channel.InlineKeyboard, error) {
+	uid := strconv.FormatInt(userID, 10)
+	
+	switch action {
+	case "model":
+		// User selected a model from the keyboard
+		if !session.ValidateModel(value) {
+			return fmt.Sprintf("❌ Unknown model: %s", value), nil, nil
+		}
+		sess := h.sessions.GetOrCreate(ch, uid)
+		sess.SetModel(value)
+		return fmt.Sprintf("✅ Model switched to: *%s*", channel.FormatModelName(value)), nil, nil
+		
+	case "new":
+		// Confirmation tap on new chat button - just acknowledge
+		return "🔄 Chat cleared! Send a message to continue.", nil, nil
+		
+	default:
+		return "", nil, nil
+	}
 }
 
 // getUserID extracts user ID from message metadata

@@ -154,6 +154,7 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 
 	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
 	telegram.SetHandler(gw.handleMessage)
+	telegram.SetCallbackHandler(gw.handleTelegramCallback)
 
 	if err := telegram.Start(ctx); err != nil {
 		log.Printf("⚠️  Failed to start telegram: %v", err)
@@ -163,6 +164,11 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	gw.mu.Lock()
 	gw.telegram = telegram
 	gw.mu.Unlock()
+}
+
+// handleTelegramCallback processes inline keyboard button presses
+func (gw *Gateway) handleTelegramCallback(chatID int64, userID int64, action, value string) (string, *channel.InlineKeyboard, error) {
+	return gw.commands.HandleCallback("telegram", userID, action, value)
 }
 
 // startConfigWatcher starts watching the config file for changes

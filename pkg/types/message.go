@@ -11,6 +11,7 @@ type Message struct {
 	Timestamp time.Time      `json:"timestamp"`
 	IsBot     bool           `json:"isBot"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	Keyboard  any            `json:"keyboard,omitempty"` // Inline keyboard for Telegram
 }
 
 // AgentRequest is sent to the AI model
