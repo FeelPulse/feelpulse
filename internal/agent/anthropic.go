@@ -572,7 +572,30 @@ func (c *AnthropicClient) ChatWithTools(
 				input = make(map[string]any)
 			}
 
-			log.Printf("🔧 [tool] executing %s", toolUse.Name)
+			// Log tool call with key param for context
+			switch toolUse.Name {
+			case "exec":
+				if cmd, ok := input["command"].(string); ok {
+					log.Printf("🔧 [tool] exec: %s", cmd)
+				} else {
+					log.Printf("🔧 [tool] executing exec")
+				}
+			case "file_read", "file_write", "file_list":
+				if path, ok := input["path"].(string); ok {
+					log.Printf("🔧 [tool] %s: %s", toolUse.Name, path)
+				} else {
+					log.Printf("🔧 [tool] executing %s", toolUse.Name)
+				}
+			case "web_search":
+				if q, ok := input["query"].(string); ok {
+					log.Printf("🔧 [tool] web_search: %s", q)
+				} else {
+					log.Printf("🔧 [tool] executing web_search")
+				}
+			default:
+				log.Printf("🔧 [tool] executing %s", toolUse.Name)
+			}
+
 			result, err := executor(toolUse.Name, input)
 			if err != nil {
 				result = fmt.Sprintf("Error: %v", err)
