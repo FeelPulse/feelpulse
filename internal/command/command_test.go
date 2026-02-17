@@ -7,6 +7,7 @@ import (
 
 	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
+	"github.com/FeelPulse/feelpulse/internal/usage"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -310,6 +311,39 @@ func TestHandlerReminders(t *testing.T) {
 
 	if !strings.Contains(result.Text, "Test reminder") {
 		t.Errorf("Expected reminder in list, got: %s", result.Text)
+	}
+}
+
+func TestHandlerUsage(t *testing.T) {
+	store := session.NewStore()
+	tracker := usage.NewTracker()
+
+	handler := NewHandler(store, nil)
+	handler.SetUsageTracker(tracker)
+
+	// Record some usage
+	tracker.Record("telegram", "user123", 100, 50, "claude-sonnet-4")
+	tracker.Record("telegram", "user123", 200, 100, "gpt-4o")
+
+	msg := &types.Message{
+		Text:    "/usage",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should contain usage info
+	if !strings.Contains(result.Text, "450") { // total tokens
+		t.Errorf("Expected total tokens in output, got: %s", result.Text)
+	}
+	if !strings.Contains(result.Text, "2") { // request count
+		t.Errorf("Expected request count in output, got: %s", result.Text)
 	}
 }
 

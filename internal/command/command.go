@@ -9,6 +9,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
+	"github.com/FeelPulse/feelpulse/internal/usage"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -16,6 +17,7 @@ import (
 type Handler struct {
 	sessions  *session.Store
 	scheduler *scheduler.Scheduler
+	usage     *usage.Tracker
 	cfg       *config.Config
 }
 
@@ -30,6 +32,11 @@ func NewHandler(sessions *session.Store, cfg *config.Config) *Handler {
 // SetScheduler sets the scheduler for reminder commands
 func (h *Handler) SetScheduler(s *scheduler.Scheduler) {
 	h.scheduler = s
+}
+
+// SetUsageTracker sets the usage tracker
+func (h *Handler) SetUsageTracker(t *usage.Tracker) {
+	h.usage = t
 }
 
 // IsCommand checks if a message is a slash command
@@ -87,6 +94,8 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response = h.handleRemind(msg.Channel, userID, args)
 	case "reminders":
 		response = h.handleReminders(msg.Channel, userID)
+	case "usage", "stats":
+		response = h.handleUsage(msg.Channel, userID)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -202,6 +211,16 @@ func (h *Handler) handleReminders(channel, userID string) string {
 	return sb.String()
 }
 
+// handleUsage shows token usage statistics
+func (h *Handler) handleUsage(channel, userID string) string {
+	if h.usage == nil {
+		return "❌ Usage tracking is not enabled."
+	}
+
+	stats := h.usage.Get(channel, userID)
+	return stats.String()
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse Commands*
@@ -210,6 +229,7 @@ func (h *Handler) handleHelp() string {
 /history [n] — Show last n messages (default: 10)
 /remind in <time> <message> — Set a reminder
 /reminders — List active reminders
+/usage — Show token usage statistics
 /help — Show this help message
 
 Just send a message to chat with the AI!`
