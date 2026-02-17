@@ -111,6 +111,8 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response, keyboard = h.handleModels()
 	case "skills":
 		response = h.handleSkills()
+	case "export":
+		return h.handleExport(msg.Channel, userID, msg)
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -304,6 +306,70 @@ func (h *Handler) handleSkills() string {
 	return sb.String()
 }
 
+// handleExport exports conversation history as a text file
+func (h *Handler) handleExport(ch, userID string, msg *types.Message) (*types.Message, error) {
+	sess, exists := h.sessions.Get(ch, userID)
+	if !exists || sess.Len() == 0 {
+		return &types.Message{
+			Text:    "📭 No conversation to export.",
+			Channel: ch,
+			IsBot:   true,
+		}, nil
+	}
+
+	messages := sess.GetAllMessages()
+
+	// Build export content
+	var sb strings.Builder
+	sb.WriteString("# FeelPulse Conversation Export\n")
+	sb.WriteString(fmt.Sprintf("# Exported: %s\n", time.Now().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("# Messages: %d\n\n", len(messages)))
+
+	for _, m := range messages {
+		role := "User"
+		if m.IsBot {
+			role = "AI"
+		}
+
+		timestamp := m.Timestamp.Format("2006-01-02 15:04:05")
+		sb.WriteString(fmt.Sprintf("[%s] %s: %s\n\n", timestamp, role, m.Text))
+	}
+
+	content := sb.String()
+
+	// Return special message with export data
+	return &types.Message{
+		Text:    content,
+		Channel: ch,
+		IsBot:   true,
+		Metadata: map[string]any{
+			"export":   true,
+			"filename": fmt.Sprintf("feelpulse-export-%s.txt", time.Now().Format("2006-01-02")),
+			"chat_id":  msg.Metadata["chat_id"],
+		},
+	}, nil
+}
+
+// FormatExport formats messages for export (public helper for testing)
+func FormatExport(messages []types.Message) string {
+	var sb strings.Builder
+	sb.WriteString("# FeelPulse Conversation Export\n")
+	sb.WriteString(fmt.Sprintf("# Exported: %s\n", time.Now().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("# Messages: %d\n\n", len(messages)))
+
+	for _, m := range messages {
+		role := "User"
+		if m.IsBot {
+			role = "AI"
+		}
+
+		timestamp := m.Timestamp.Format("2006-01-02 15:04:05")
+		sb.WriteString(fmt.Sprintf("[%s] %s: %s\n\n", timestamp, role, m.Text))
+	}
+
+	return sb.String()
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse — AI Chat Assistant*
@@ -311,6 +377,7 @@ func (h *Handler) handleHelp() string {
 📝 *Conversation*
   /new — Start a new conversation
   /history — Show recent messages
+  /export — Export conversation as .txt file
 
 🤖 *AI Model*
   /model — Show or switch AI model

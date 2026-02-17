@@ -347,6 +347,124 @@ func TestHandlerUsage(t *testing.T) {
 	}
 }
 
+func TestHandlerExport(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	// Add some messages
+	sess := store.GetOrCreate("telegram", "user123")
+	sess.AddMessage(types.Message{
+		Text:      "Hello!",
+		From:      "user",
+		Timestamp: time.Now().Add(-5 * time.Minute),
+		IsBot:     false,
+	})
+	sess.AddMessage(types.Message{
+		Text:      "Hi there! How can I help?",
+		Timestamp: time.Now().Add(-4 * time.Minute),
+		IsBot:     true,
+	})
+
+	msg := &types.Message{
+		Text:    "/export",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+			"chat_id": int64(12345),
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Expected response")
+	}
+
+	// Check export metadata
+	if result.Metadata == nil {
+		t.Fatal("Expected metadata in response")
+	}
+
+	export, ok := result.Metadata["export"].(bool)
+	if !ok || !export {
+		t.Error("Expected export=true in metadata")
+	}
+
+	filename, ok := result.Metadata["filename"].(string)
+	if !ok || filename == "" {
+		t.Error("Expected filename in metadata")
+	}
+
+	// Check content
+	if !strings.Contains(result.Text, "Hello!") {
+		t.Error("Export should contain user message")
+	}
+	if !strings.Contains(result.Text, "Hi there!") {
+		t.Error("Export should contain bot message")
+	}
+	if !strings.Contains(result.Text, "User:") {
+		t.Error("Export should contain User: label")
+	}
+	if !strings.Contains(result.Text, "AI:") {
+		t.Error("Export should contain AI: label")
+	}
+}
+
+func TestHandlerExportEmpty(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	msg := &types.Message{
+		Text:    "/export",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "newuser",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should indicate no conversation
+	if result.Metadata != nil {
+		if _, ok := result.Metadata["export"]; ok {
+			t.Error("Should not have export metadata for empty conversation")
+		}
+	}
+}
+
+func TestFormatExport(t *testing.T) {
+	messages := []types.Message{
+		{
+			Text:      "Hello",
+			Timestamp: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+			IsBot:     false,
+		},
+		{
+			Text:      "Hi there!",
+			Timestamp: time.Date(2024, 1, 15, 10, 31, 0, 0, time.UTC),
+			IsBot:     true,
+		},
+	}
+
+	export := FormatExport(messages)
+
+	if !strings.Contains(export, "[2024-01-15 10:30:00] User: Hello") {
+		t.Errorf("Export format incorrect. Got: %s", export)
+	}
+	if !strings.Contains(export, "[2024-01-15 10:31:00] AI: Hi there!") {
+		t.Errorf("Export format incorrect. Got: %s", export)
+	}
+	if !strings.Contains(export, "# Messages: 2") {
+		t.Error("Export should include message count")
+	}
+}
+
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
 }
