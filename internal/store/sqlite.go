@@ -31,8 +31,13 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	}
 
 	// Enable WAL mode for better concurrent write performance
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec("PRAGMA busy_timeout=5000")
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		// Log but don't fail — WAL is an optimization, not required
+		fmt.Fprintf(os.Stderr, "warning: failed to enable WAL mode: %v\n", err)
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to set busy timeout: %v\n", err)
+	}
 
 	// Create table if not exists
 	_, err = db.Exec(`
