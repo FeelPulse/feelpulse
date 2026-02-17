@@ -21,9 +21,11 @@ type GatewayConfig struct {
 }
 
 type AgentConfig struct {
-	Model    string `yaml:"model"`
-	Provider string `yaml:"provider"`
-	APIKey   string `yaml:"apiKey"`
+	Model      string `yaml:"model"`
+	Provider   string `yaml:"provider"`
+	APIKey     string `yaml:"apiKey"`
+	MaxTokens  int    `yaml:"maxTokens"`
+	System     string `yaml:"system"`
 }
 
 type ChannelsConfig struct {
@@ -48,8 +50,14 @@ func Default() *Config {
 			Bind: "localhost",
 		},
 		Agent: AgentConfig{
-			Model:    "claude-sonnet-4",
-			Provider: "anthropic",
+			Model:     "claude-sonnet-4-20250514",
+			Provider:  "anthropic",
+			MaxTokens: 4096,
+		},
+		Channels: ChannelsConfig{
+			Telegram: TelegramConfig{
+				Enabled: false,
+			},
 		},
 		Hooks: HooksConfig{
 			Enabled: true,

@@ -67,7 +67,15 @@ func cmdStart() {
 	}
 
 	fmt.Printf("🫀 FeelPulse v%s\n", version)
-	fmt.Printf("📡 Starting gateway on :%d\n", cfg.Gateway.Port)
+	fmt.Printf("📡 Starting gateway on %s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
+	
+	// Show configured channels
+	if cfg.Channels.Telegram.Enabled {
+		fmt.Println("📱 Telegram channel enabled")
+	}
+	if cfg.Agent.APIKey != "" {
+		fmt.Printf("🤖 Agent: %s/%s\n", cfg.Agent.Provider, cfg.Agent.Model)
+	}
 
 	gw := gateway.New(cfg)
 	if err := gw.Start(); err != nil {
@@ -84,7 +92,25 @@ func cmdStatus() {
 	}
 
 	fmt.Printf("🫀 FeelPulse v%s\n", version)
-	fmt.Printf("📡 Gateway: http://localhost:%d\n", cfg.Gateway.Port)
-	// TODO: ping gateway health endpoint
-	fmt.Println("✅ Config loaded")
+	fmt.Printf("📡 Gateway: http://%s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
+	
+	// Show configuration status
+	fmt.Println("\n📋 Configuration:")
+	if cfg.Agent.APIKey != "" {
+		fmt.Printf("   🤖 Agent: %s/%s\n", cfg.Agent.Provider, cfg.Agent.Model)
+	} else {
+		fmt.Println("   🤖 Agent: Not configured (set apiKey in config.yaml)")
+	}
+	
+	if cfg.Channels.Telegram.Enabled {
+		if cfg.Channels.Telegram.BotToken != "" {
+			fmt.Println("   📱 Telegram: Configured")
+		} else {
+			fmt.Println("   📱 Telegram: Enabled but no token")
+		}
+	} else {
+		fmt.Println("   📱 Telegram: Disabled")
+	}
+	
+	fmt.Println("\n✅ Config loaded")
 }

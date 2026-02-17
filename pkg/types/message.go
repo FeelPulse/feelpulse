@@ -4,12 +4,13 @@ import "time"
 
 // Message represents a chat message
 type Message struct {
-	ID        string    `json:"id"`
-	Text      string    `json:"text"`
-	From      string    `json:"from"`
-	Channel   string    `json:"channel"`
-	Timestamp time.Time `json:"timestamp"`
-	IsBot     bool      `json:"isBot"`
+	ID        string         `json:"id"`
+	Text      string         `json:"text"`
+	From      string         `json:"from"`
+	Channel   string         `json:"channel"`
+	Timestamp time.Time      `json:"timestamp"`
+	IsBot     bool           `json:"isBot"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // AgentRequest is sent to the AI model

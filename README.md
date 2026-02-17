@@ -1,76 +1,103 @@
-# FeelPulse
+# 🫀 FeelPulse
 
-Fast, lightweight AI assistant platform written in Go.
+Fast AI Assistant Platform in Go. Minimal dependencies, instant startup.
 
-## Why FeelPulse?
+## Features
 
-- ⚡ **Instant startup** — Go binary, no runtime overhead
-- 🧠 **Multi-model** — Claude, GPT, Gemini, local models
-- 📱 **Multi-channel** — Telegram, WhatsApp, Discord, WeChat
-- 🔌 **Extensible** — Plugin system for channels, tools, hooks
-- 🔒 **Secure** — E2E encryption support, token auth
-- 🪶 **Lightweight** — Single binary, minimal memory
+- **Telegram Bot** - Long polling with Markdown support
+- **Anthropic Claude** - Native Messages API client
+- **HTTP Gateway** - Health checks and webhooks
+- **YAML Config** - Simple configuration
 
 ## Quick Start
 
 ```bash
-# Install
-go install github.com/FeelPulse/feelpulse/cmd/feelpulse@latest
+# Build
+make build
 
-# Initialize
-feelpulse init
+# Initialize config
+./build/feelpulse init
 
-# Start gateway
-feelpulse start
+# Edit config with your API keys
+vim ~/.feelpulse/config.yaml
 
-# Check status
-feelpulse status
-```
-
-## Architecture
-
-```
-feelpulse
-├── cmd/feelpulse/     # CLI entry point
-├── internal/
-│   ├── gateway/       # HTTP/WebSocket server
-│   ├── config/        # Configuration management
-│   ├── channel/       # Messaging channels (Telegram, WhatsApp, etc.)
-│   ├── agent/         # AI model routing (Claude, GPT, etc.)
-│   └── hook/          # Webhook system
-└── pkg/types/         # Shared types
+# Start
+./build/feelpulse start
 ```
 
 ## Configuration
 
+After `feelpulse init`, edit `~/.feelpulse/config.yaml`:
+
 ```yaml
-# ~/.feelpulse/config.yaml
 gateway:
   port: 18789
   bind: localhost
 
 agent:
-  model: claude-sonnet-4
+  model: claude-sonnet-4-20250514
   provider: anthropic
+  apiKey: sk-ant-...  # Your Anthropic API key
 
 channels:
   telegram:
     enabled: true
-    token: your-bot-token
+    token: "123456:ABC..."  # Your Telegram bot token
+
+hooks:
+  enabled: true
+  token: ""  # Optional auth token for webhooks
+  path: /hooks
 ```
 
-## Development
+### Getting API Keys
+
+1. **Anthropic API Key**: Get from [console.anthropic.com](https://console.anthropic.com)
+2. **Telegram Bot Token**: Create a bot via [@BotFather](https://t.me/BotFather)
+
+## Commands
 
 ```bash
-# Build
-go build -o feelpulse ./cmd/feelpulse
-
-# Run
-./feelpulse start
-
-# Test
-go test ./...
+feelpulse init     # Create default config
+feelpulse start    # Start the gateway
+feelpulse status   # Check configuration
+feelpulse version  # Print version
 ```
+
+## Makefile Targets
+
+```bash
+make build    # Build binary to ./build/
+make install  # Install to $GOPATH/bin
+make clean    # Remove build artifacts
+make test     # Run tests
+make run      # Build and run
+make dev      # Format, vet, build, run
+make check    # Format, vet, test
+```
+
+## Architecture
+
+```
+feelpulse/
+├── cmd/feelpulse/     # CLI entry point
+├── internal/
+│   ├── agent/         # AI provider clients
+│   ├── channel/       # Chat channels (Telegram)
+│   ├── config/        # YAML configuration
+│   └── gateway/       # HTTP server + routing
+└── pkg/types/         # Shared types
+```
+
+## API Endpoints
+
+- `GET /health` - Health check with status
+- `POST /hooks/*` - Webhook handlers
+
+## Dependencies
+
+- Go 1.21+
+- `gopkg.in/yaml.v3` (only external dependency)
 
 ## License
 
