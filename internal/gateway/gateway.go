@@ -155,6 +155,11 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
 	telegram.SetHandler(gw.handleMessage)
 	telegram.SetCallbackHandler(gw.handleTelegramCallback)
+	telegram.SetAllowedUsers(gw.cfg.Channels.Telegram.AllowedUsers)
+
+	if len(gw.cfg.Channels.Telegram.AllowedUsers) > 0 {
+		log.Printf("🔒 Telegram allowlist: %v", gw.cfg.Channels.Telegram.AllowedUsers)
+	}
 
 	if err := telegram.Start(ctx); err != nil {
 		log.Printf("⚠️  Failed to start telegram: %v", err)
@@ -228,6 +233,17 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 			oldTelegram.Stop()
 		}
 		gw.initializeTelegram(ctx)
+	} else {
+		// Update allowlist without full restart
+		gw.mu.RLock()
+		telegram := gw.telegram
+		gw.mu.RUnlock()
+		if telegram != nil {
+			telegram.SetAllowedUsers(newCfg.Channels.Telegram.AllowedUsers)
+			if len(newCfg.Channels.Telegram.AllowedUsers) > 0 {
+				log.Printf("🔒 Telegram allowlist updated: %v", newCfg.Channels.Telegram.AllowedUsers)
+			}
+		}
 	}
 
 	// Update commands handler with new config

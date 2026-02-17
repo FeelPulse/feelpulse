@@ -48,8 +48,9 @@ type DiscordConfig struct {
 }
 
 type TelegramConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	BotToken string `yaml:"token"`
+	Enabled      bool     `yaml:"enabled"`
+	BotToken     string   `yaml:"token"`
+	AllowedUsers []string `yaml:"allowedUsers"` // empty = allow all; non-empty = only these usernames
 }
 
 type HooksConfig struct {

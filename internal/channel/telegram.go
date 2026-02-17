@@ -24,6 +24,7 @@ type TelegramBot struct {
 
 	handler         func(msg *types.Message) (*types.Message, error)
 	callbackHandler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
+	allowedUsers    []string // empty = allow all; non-empty = only these usernames
 	mu              sync.Mutex
 	running         bool
 	cancel          context.CancelFunc
@@ -96,6 +97,29 @@ func (t *TelegramBot) SetHandler(handler func(msg *types.Message) (*types.Messag
 // SetCallbackHandler sets the callback query handler function
 func (t *TelegramBot) SetCallbackHandler(handler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)) {
 	t.callbackHandler = handler
+}
+
+// SetAllowedUsers sets the allowlist of usernames
+// Empty list means all users are allowed
+func (t *TelegramBot) SetAllowedUsers(users []string) {
+	t.allowedUsers = users
+}
+
+// IsUserAllowed checks if a username is in the allowlist
+// Returns true if allowlist is empty (allow all) or if username is in the list
+func (t *TelegramBot) IsUserAllowed(username string) bool {
+	// Empty allowlist = allow everyone
+	if len(t.allowedUsers) == 0 {
+		return true
+	}
+
+	// Check if username is in allowlist
+	for _, allowed := range t.allowedUsers {
+		if allowed == username {
+			return true
+		}
+	}
+	return false
 }
 
 // Start begins polling for updates
@@ -215,6 +239,19 @@ func (t *TelegramBot) poll(ctx context.Context) error {
 // handleMessage processes an incoming message
 func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage) {
 	if t.handler == nil {
+		return
+	}
+
+	// Get username for allowlist check
+	var username string
+	if tgMsg.From != nil {
+		username = tgMsg.From.Username
+	}
+
+	// Check allowlist before processing
+	if !t.IsUserAllowed(username) {
+		log.Printf("⛔ Blocked message from unauthorized user: %s", username)
+		_ = t.SendMessage(tgMsg.Chat.ID, "⛔ You are not authorized to use this bot.", false)
 		return
 	}
 
