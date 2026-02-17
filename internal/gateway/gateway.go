@@ -13,6 +13,7 @@ import (
 
 	"github.com/FeelPulse/feelpulse/internal/agent"
 	"github.com/FeelPulse/feelpulse/internal/channel"
+	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/pkg/types"
@@ -25,13 +26,16 @@ type Gateway struct {
 	telegram *channel.TelegramBot
 	router   *agent.Router
 	sessions *session.Store
+	commands *command.Handler
 }
 
 func New(cfg *config.Config) *Gateway {
+	sessions := session.NewStore()
 	gw := &Gateway{
 		cfg:      cfg,
 		mux:      http.NewServeMux(),
-		sessions: session.NewStore(),
+		sessions: sessions,
+		commands: command.NewHandler(sessions, cfg),
 	}
 	gw.setupRoutes()
 	return gw
@@ -94,6 +98,11 @@ func (gw *Gateway) Start() error {
 
 // handleMessage processes incoming messages from channels
 func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
+	// Check for slash commands first
+	if command.IsCommand(msg.Text) {
+		return gw.commands.Handle(msg)
+	}
+
 	if gw.router == nil {
 		return &types.Message{
 			Text:    "🔧 AI agent not configured. Set your API key in config.yaml",
