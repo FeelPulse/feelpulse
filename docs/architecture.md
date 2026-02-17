@@ -2,7 +2,7 @@
 
 Fast, lightweight AI assistant platform written in Go. 3ms startup, minimal dependencies.
 
-**Stats:** ~25 packages, ~8000 lines of Go code
+**Stats:** 22 packages, ~18,500 lines of Go code
 
 ---
 
