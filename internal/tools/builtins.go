@@ -81,7 +81,7 @@ func execTool() *Tool {
 func webSearchTool() *Tool {
 	return &Tool{
 		Name:        "web_search",
-		Description: "Search the web for information using DuckDuckGo. Returns relevant search results with titles, URLs, and snippets.",
+		Description: "Search the web for information using DuckDuckGo. Returns relevant search results with titles, URLs, and snippets. Also provides instant answers for simple queries.",
 		Parameters: []Parameter{
 			{
 				Name:        "query",
@@ -108,30 +108,94 @@ func webSearchTool() *Tool {
 			} else if l, ok := params["limit"].(int); ok {
 				limit = l
 			}
-
-			results, err := duckDuckGoSearch(ctx, query, limit)
-			if err != nil {
-				return "", fmt.Errorf("search failed: %w", err)
+			if limit < 1 {
+				limit = 1
 			}
-
-			if len(results) == 0 {
-				return "No results found for: " + query, nil
+			if limit > 10 {
+				limit = 10
 			}
 
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("Search results for '%s':\n\n", query))
-			for i, r := range results {
-				sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
-				sb.WriteString(fmt.Sprintf("   URL: %s\n", r.URL))
-				if r.Snippet != "" {
-					sb.WriteString(fmt.Sprintf("   %s\n", r.Snippet))
+
+			// Try instant answer API first for quick facts
+			instant, err := duckDuckGoInstantAnswer(ctx, query)
+			if err == nil && instant != "" {
+				sb.WriteString("📋 *Instant Answer:*\n")
+				sb.WriteString(instant)
+				sb.WriteString("\n\n")
+			}
+
+			// Get regular search results
+			results, err := duckDuckGoSearch(ctx, query, limit)
+			if err != nil {
+				// If instant answer succeeded, return that even if search fails
+				if instant != "" {
+					sb.WriteString("(Web search unavailable: " + err.Error() + ")\n")
+					return sb.String(), nil
 				}
-				sb.WriteString("\n")
+				return "", fmt.Errorf("search failed: %w", err)
+			}
+
+			if len(results) == 0 && instant == "" {
+				return "No results found for: " + query, nil
+			}
+
+			if len(results) > 0 {
+				sb.WriteString("🔍 *Web Results:*\n\n")
+				for i, r := range results {
+					sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
+					sb.WriteString(fmt.Sprintf("   URL: %s\n", r.URL))
+					if r.Snippet != "" {
+						sb.WriteString(fmt.Sprintf("   %s\n", r.Snippet))
+					}
+					sb.WriteString("\n")
+				}
 			}
 
 			return sb.String(), nil
 		},
 	}
+}
+
+// duckDuckGoInstantAnswer fetches instant answers from DuckDuckGo's API
+func duckDuckGoInstantAnswer(ctx context.Context, query string) (string, error) {
+	apiURL := fmt.Sprintf("https://api.duckduckgo.com/?q=%s&format=json&no_html=1&skip_disambig=1",
+		url.QueryEscape(query))
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API returned %d", resp.StatusCode)
+	}
+
+	var ddgResp DuckDuckGoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ddgResp); err != nil {
+		return "", err
+	}
+
+	// Build instant answer from available data
+	var answer strings.Builder
+
+	if ddgResp.AbstractText != "" {
+		answer.WriteString(ddgResp.AbstractText)
+		if ddgResp.AbstractSource != "" {
+			answer.WriteString(fmt.Sprintf("\n(Source: %s)", ddgResp.AbstractSource))
+		}
+	}
+
+	return answer.String(), nil
 }
 
 // SearchResult represents a web search result
@@ -160,27 +224,44 @@ type DuckDuckGoResponse struct {
 // duckDuckGoSearch performs a search using DuckDuckGo's Instant Answer API
 func duckDuckGoSearch(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	// Use DuckDuckGo's HTML search page since the API is limited
-	// Fall back to a simple approach
 	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; FeelPulse/1.0)")
+	// Use a realistic user agent to avoid blocking
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("search request timed out")
+		}
+		return nil, fmt.Errorf("search request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// Check for rate limiting or blocking
+	if resp.StatusCode == 429 {
+		return nil, fmt.Errorf("rate limited by DuckDuckGo, please try again later")
+	}
+	if resp.StatusCode == 403 {
+		return nil, fmt.Errorf("blocked by DuckDuckGo, search unavailable")
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("search returned status %d", resp.StatusCode)
+	}
+
+	// Limit response body size to avoid memory issues
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024)) // 512KB max
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Simple HTML parsing - extract links and titles
