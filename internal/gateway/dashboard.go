@@ -34,6 +34,16 @@ type ActivityEntry struct {
 
 // handleDashboard serves the web dashboard
 func (gw *Gateway) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	// Auth check (using same token as hooks)
+	if gw.cfg.Hooks.Token != "" {
+		token := r.Header.Get("Authorization")
+		expected := "Bearer " + gw.cfg.Hooks.Token
+		if token != expected {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	data := gw.collectDashboardData()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

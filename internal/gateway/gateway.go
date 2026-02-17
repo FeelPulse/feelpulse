@@ -632,6 +632,7 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 		}
 
 		// Create tool executor
+		// TODO: pass parent context for graceful cancellation
 		executor := func(name string, input map[string]any) (string, error) {
 			if toolRegistry == nil {
 				return "", fmt.Errorf("no tools available")
@@ -1209,8 +1210,6 @@ func (gw *Gateway) prepareMessageProcessing(msg *types.Message) (*messageProcess
 
 // finalizeMessageProcessing handles post-processing after agent response
 func (gw *Gateway) finalizeMessageProcessing(msg *types.Message, ctx *messageProcessingContext, reply *types.Message) {
-	defer gw.activeRequests.Done()
-
 	// Track token usage in metrics
 	if reply.Metadata != nil {
 		if input, ok := reply.Metadata["input_tokens"].(int); ok {
@@ -1230,6 +1229,7 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	if earlyReply != nil {
 		return earlyReply, nil
 	}
+	defer gw.activeRequests.Done() // single Done, always runs
 
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
@@ -1241,7 +1241,6 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 				IsBot:   true,
 			}
 			err = nil // Return gracefully instead of crashing
-			gw.activeRequests.Done()
 		}
 	}()
 
@@ -1249,7 +1248,6 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	reply, err = ctx.router.ProcessWithHistoryStream(ctx.history, agent.StreamCallback(onDelta))
 	if err != nil {
 		ctx.reqLog.Error("Agent error: %v", err)
-		gw.activeRequests.Done()
 		return &types.Message{
 			Text:    "❌ Sorry, I encountered an error processing your message.",
 			Channel: msg.Channel,
@@ -1267,6 +1265,7 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	if earlyReply != nil {
 		return earlyReply, nil
 	}
+	defer gw.activeRequests.Done() // single Done, always runs
 
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
@@ -1278,7 +1277,6 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 				IsBot:   true,
 			}
 			err = nil // Return gracefully instead of crashing
-			gw.activeRequests.Done()
 		}
 	}()
 
@@ -1286,7 +1284,6 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	reply, err = ctx.router.ProcessWithHistory(ctx.history)
 	if err != nil {
 		ctx.reqLog.Error("Agent error: %v", err)
-		gw.activeRequests.Done()
 		return &types.Message{
 			Text:    "❌ Sorry, I encountered an error processing your message.",
 			Channel: msg.Channel,

@@ -84,20 +84,6 @@ func (gw *Gateway) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Legacy auth check (for backward compatibility with more detailed error)
-	if gw.cfg.Hooks.Token != "" {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
-			gw.writeOpenAIError(w, http.StatusUnauthorized, "Missing or invalid Authorization header", "invalid_request_error")
-			return
-		}
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if token != gw.cfg.Hooks.Token {
-			gw.writeOpenAIError(w, http.StatusUnauthorized, "Invalid API key", "invalid_request_error")
-			return
-		}
-	}
-
 	// Parse request
 	var req OpenAIRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

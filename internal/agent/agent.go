@@ -152,6 +152,7 @@ func (r *Router) createToolExecutor() ToolExecutor {
 			return "", fmt.Errorf("unknown tool: %s", name)
 		}
 
+		// TODO: pass parent context for graceful cancellation
 		// Execute with a timeout context (60 seconds)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
