@@ -10,6 +10,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/gateway"
 	"github.com/FeelPulse/feelpulse/internal/memory"
+	"github.com/FeelPulse/feelpulse/internal/tui"
 )
 
 const version = "0.1.0"
@@ -31,6 +32,8 @@ func main() {
 		cmdAuth()
 	case "workspace":
 		cmdWorkspace()
+	case "tui":
+		cmdTUI()
 	case "version":
 		fmt.Printf("feelpulse v%s\n", version)
 	case "help", "-h", "--help":
@@ -55,6 +58,7 @@ Commands:
   auth           Configure authentication (API key or setup-token)
   workspace      Manage workspace files (SOUL.md, USER.md, MEMORY.md)
     init         Create workspace directory with template files
+  tui            Start interactive terminal chat interface
   version        Print version
   help           Show this help`)
 }
@@ -253,4 +257,24 @@ func cmdWorkspaceInit() {
 	fmt.Println("  📄 USER.md   — User context information")
 	fmt.Println("  📄 MEMORY.md — Long-term memory across conversations")
 	fmt.Println("\nEdit these files to customize your assistant!")
+}
+
+func cmdTUI() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		fmt.Println("Run 'feelpulse init' to create a config file.")
+		os.Exit(1)
+	}
+
+	if cfg.Agent.APIKey == "" && cfg.Agent.AuthToken == "" {
+		fmt.Fprintln(os.Stderr, "❌ No authentication configured.")
+		fmt.Println("Run 'feelpulse auth' to configure API key or setup-token.")
+		os.Exit(1)
+	}
+
+	if err := tui.Run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
