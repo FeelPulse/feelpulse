@@ -21,14 +21,15 @@ import (
 )
 
 type Gateway struct {
-	cfg      *config.Config
-	mux      *http.ServeMux
-	server   *http.Server
-	telegram *channel.TelegramBot
-	router   *agent.Router
-	sessions *session.Store
-	commands *command.Handler
-	memory   *memory.Manager
+	cfg       *config.Config
+	mux       *http.ServeMux
+	server    *http.Server
+	telegram  *channel.TelegramBot
+	router    *agent.Router
+	sessions  *session.Store
+	commands  *command.Handler
+	memory    *memory.Manager
+	compactor *session.Compactor
 }
 
 func New(cfg *config.Config) *Gateway {
@@ -76,6 +77,17 @@ func (gw *Gateway) Start() error {
 			router.SetSystemPromptBuilder(gw.memory.BuildSystemPrompt)
 			gw.router = router
 			log.Printf("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
+
+			// Initialize compactor with summarizer
+			if anthropicClient, ok := router.Agent().(*agent.AnthropicClient); ok {
+				summarizer := agent.NewConversationSummarizer(anthropicClient)
+				maxTokens := gw.cfg.Agent.MaxContextTokens
+				if maxTokens <= 0 {
+					maxTokens = session.DefaultMaxContextTokens
+				}
+				gw.compactor = session.NewCompactor(summarizer, maxTokens, session.DefaultKeepLastN)
+				log.Printf("📦 Context compaction enabled (threshold: %dk tokens)", maxTokens/1000)
+			}
 		}
 	}
 
@@ -138,6 +150,17 @@ func (gw *Gateway) handleMessage(msg *types.Message) (*types.Message, error) {
 
 	// Get conversation history for agent
 	history := sess.GetAllMessages()
+
+	// Compact history if needed (summarize old messages)
+	if gw.compactor != nil {
+		compacted, err := gw.compactor.CompactIfNeeded(history)
+		if err != nil {
+			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
+		} else if len(compacted) < len(history) {
+			log.Printf("📦 Compacted history: %d → %d messages", len(history), len(compacted))
+			history = compacted
+		}
+	}
 
 	// Route to agent with full history
 	reply, err := gw.router.ProcessWithHistory(history)

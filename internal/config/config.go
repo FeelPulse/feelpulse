@@ -26,13 +26,14 @@ type GatewayConfig struct {
 }
 
 type AgentConfig struct {
-	Model           string `yaml:"model"`
-	Provider        string `yaml:"provider"`
-	APIKey          string `yaml:"apiKey"`
-	AuthToken       string `yaml:"authToken"`  // OAuth setup-token (sk-ant-oat-...) for subscription auth
-	MaxTokens       int    `yaml:"maxTokens"`
-	System          string `yaml:"system"`
-	FallbackModel   string `yaml:"fallbackModel"`    // Fallback model if primary fails
+	Model            string `yaml:"model"`
+	Provider         string `yaml:"provider"`
+	APIKey           string `yaml:"apiKey"`
+	AuthToken        string `yaml:"authToken"`        // OAuth setup-token (sk-ant-oat-...) for subscription auth
+	MaxTokens        int    `yaml:"maxTokens"`
+	MaxContextTokens int    `yaml:"maxContextTokens"` // Threshold for context compaction (default: 80000)
+	System           string `yaml:"system"`
+	FallbackModel    string `yaml:"fallbackModel"`    // Fallback model if primary fails
 	FallbackProvider string `yaml:"fallbackProvider"` // Fallback provider (defaults to same as primary)
 }
 
@@ -65,9 +66,10 @@ func Default() *Config {
 			Bind: "localhost",
 		},
 		Agent: AgentConfig{
-			Model:     "claude-sonnet-4-20250514",
-			Provider:  "anthropic",
-			MaxTokens: 4096,
+			Model:            "claude-sonnet-4-20250514",
+			Provider:         "anthropic",
+			MaxTokens:        4096,
+			MaxContextTokens: 80000,
 		},
 		Channels: ChannelsConfig{
 			Telegram: TelegramConfig{
