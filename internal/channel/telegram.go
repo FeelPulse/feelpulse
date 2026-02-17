@@ -560,6 +560,27 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 			}
 			return
 		}
+
+		// Check if this is a browse response with screenshot
+		if screenshotPath, ok := reply.Metadata["screenshot_path"].(string); ok && screenshotPath != "" {
+			caption, _ := reply.Metadata["screenshot_caption"].(string)
+			// Send text first
+			if reply.Text != "" {
+				parts := SplitLongMessage(reply.Text, SafeMessageLength)
+				for _, part := range parts {
+					if err := t.SendMessage(chatID, part, true); err != nil {
+						log.Printf("❌ Failed to send reply: %v", err)
+					}
+				}
+			}
+			// Then send screenshot as photo
+			if err := t.SendPhoto(chatID, screenshotPath, caption); err != nil {
+				log.Printf("⚠️ Failed to send screenshot: %v (continuing without photo)", err)
+			} else {
+				log.Printf("📸 Screenshot sent: %s", screenshotPath)
+			}
+			return
+		}
 	}
 
 	// Check if reply has a keyboard

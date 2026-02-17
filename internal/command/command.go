@@ -21,6 +21,7 @@ import (
 // BrowserNavigator interface for /browse command
 type BrowserNavigator interface {
 	Navigate(params map[string]interface{}) (string, error)
+	Screenshot(params map[string]interface{}) (string, error)
 }
 
 // ContextCompactor interface for /compact command
@@ -206,7 +207,7 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 	case "export":
 		return h.handleExport(msg.Channel, userID, msg)
 	case "browse":
-		response = h.handleBrowse(msg.Channel, userID, args)
+		return h.handleBrowse(msg.Channel, userID, args), nil
 	case "compact":
 		response = h.handleCompact(msg.Channel, userID)
 	case "fork":
@@ -577,15 +578,24 @@ func (h *Handler) handleProfile(ch, userID, args string) string {
 	}
 }
 
-// handleBrowse navigates to a URL and returns a summary
-func (h *Handler) handleBrowse(ch, userID, args string) string {
+// handleBrowse navigates to a URL, takes a screenshot, and returns the content
+// Returns text and metadata with screenshot_path for Telegram to send as photo
+func (h *Handler) handleBrowse(ch, userID, args string) *types.Message {
 	args = strings.TrimSpace(args)
 	if args == "" {
-		return "❌ *Usage:* `/browse <url>`\n\nExample:\n  `/browse https://example.com`\n\nThis fetches the page and returns its text content."
+		return &types.Message{
+			Text:    "❌ *Usage:* `/browse <url>`\n\nExample:\n  `/browse https://example.com`\n\nThis fetches the page content and takes a screenshot.",
+			Channel: ch,
+			IsBot:   true,
+		}
 	}
 
 	if h.browser == nil {
-		return "❌ Browser tools are not enabled.\n\nEnable browser in config:\n```yaml\nbrowser:\n  enabled: true\n```"
+		return &types.Message{
+			Text:    "❌ Browser tools are not enabled.\n\nEnable browser in config:\n```yaml\nbrowser:\n  enabled: true\n```",
+			Channel: ch,
+			IsBot:   true,
+		}
 	}
 
 	// Add https:// if no scheme provided
@@ -594,9 +604,14 @@ func (h *Handler) handleBrowse(ch, userID, args string) string {
 		url = "https://" + url
 	}
 
+	// Navigate and get content
 	result, err := h.browser.Navigate(map[string]interface{}{"url": url})
 	if err != nil {
-		return fmt.Sprintf("❌ Failed to browse: %v", err)
+		return &types.Message{
+			Text:    fmt.Sprintf("❌ Failed to browse: %v", err),
+			Channel: ch,
+			IsBot:   true,
+		}
 	}
 
 	// Truncate long results
@@ -605,7 +620,23 @@ func (h *Handler) handleBrowse(ch, userID, args string) string {
 		result = result[:maxLen] + "\n\n... (truncated)"
 	}
 
-	return fmt.Sprintf("🌐 *Page content:*\n\n%s", result)
+	// Take screenshot
+	screenshotPath, screenshotErr := h.browser.Screenshot(map[string]interface{}{"url": url})
+
+	response := &types.Message{
+		Text:     fmt.Sprintf("🌐 *Page content:*\n\n%s", result),
+		Channel:  ch,
+		IsBot:    true,
+		Metadata: make(map[string]any),
+	}
+
+	// Add screenshot path to metadata if successful
+	if screenshotErr == nil && screenshotPath != "" {
+		response.Metadata["screenshot_path"] = screenshotPath
+		response.Metadata["screenshot_caption"] = fmt.Sprintf("📸 Screenshot of %s", url)
+	}
+
+	return response
 }
 
 // handleCompact manually triggers context compaction

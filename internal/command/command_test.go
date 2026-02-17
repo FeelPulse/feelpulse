@@ -903,6 +903,133 @@ func TestHandlerCompact(t *testing.T) {
 	})
 }
 
+func TestHandlerRemindNoArgs(t *testing.T) {
+	store := session.NewStore()
+	sched := scheduler.New()
+	defer sched.Stop()
+
+	handler := NewHandler(store, nil)
+	handler.SetScheduler(sched)
+
+	msg := &types.Message{
+		Text:    "/remind",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should show usage hint
+	if !strings.Contains(result.Text, "Usage") {
+		t.Errorf("Expected usage hint for /remind, got: %s", result.Text)
+	}
+	if !strings.Contains(result.Text, "/remind") && !strings.Contains(result.Text, "HH:MM") {
+		t.Error("Usage hint should include examples")
+	}
+}
+
+func TestHandlerModelUnknown(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	msg := &types.Message{
+		Text:    "/model totally-unknown-model",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should show error and mention available models
+	if !strings.Contains(result.Text, "Unknown model") {
+		t.Errorf("Expected 'Unknown model' error, got: %s", result.Text)
+	}
+	if !strings.Contains(result.Text, "/models") {
+		t.Error("Should suggest using /models command")
+	}
+}
+
+func TestHandlerProfileUseNoName(t *testing.T) {
+	store := session.NewStore()
+	cfg := &config.Config{
+		Workspace: config.WorkspaceConfig{
+			Profiles: map[string]string{
+				"friendly": "/path/to/friendly.md",
+				"formal":   "/path/to/formal.md",
+			},
+		},
+	}
+	handler := NewHandler(store, cfg)
+
+	msg := &types.Message{
+		Text:    "/profile use",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should show usage hint
+	if !strings.Contains(result.Text, "Usage") {
+		t.Errorf("Expected usage hint, got: %s", result.Text)
+	}
+}
+
+func TestHandlerBrowseWithScreenshot(t *testing.T) {
+	store := session.NewStore()
+	handler := NewHandler(store, nil)
+
+	mockBrowser := &mockBrowserNavigatorWithScreenshot{
+		navigateResult:   "title: Example\n\ncontent: Hello World!",
+		screenshotResult: "/tmp/screenshot-123.png",
+	}
+	handler.SetBrowser(mockBrowser)
+
+	msg := &types.Message{
+		Text:    "/browse https://example.com",
+		Channel: "telegram",
+		Metadata: map[string]any{
+			"user_id": "user123",
+			"chat_id": int64(12345),
+		},
+	}
+
+	result, err := handler.Handle(msg)
+	if err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+
+	// Should contain page content
+	if !strings.Contains(result.Text, "Hello World!") {
+		t.Errorf("Expected page content, got: %s", result.Text)
+	}
+
+	// Should have screenshot metadata for Telegram to send as photo
+	if result.Metadata == nil {
+		t.Fatal("Expected metadata with screenshot info")
+	}
+
+	screenshotPath, ok := result.Metadata["screenshot_path"].(string)
+	if !ok || screenshotPath == "" {
+		t.Error("Expected screenshot_path in metadata")
+	}
+}
+
 // Mock implementations for testing
 type mockBrowserNavigator struct {
 	result  string
@@ -915,6 +1042,29 @@ func (m *mockBrowserNavigator) Navigate(params map[string]interface{}) (string, 
 		m.lastURL = url
 	}
 	return m.result, m.err
+}
+
+func (m *mockBrowserNavigator) Screenshot(params map[string]interface{}) (string, error) {
+	return "", nil // Basic mock doesn't support screenshot
+}
+
+type mockBrowserNavigatorWithScreenshot struct {
+	navigateResult   string
+	screenshotResult string
+	navigateErr      error
+	screenshotErr    error
+	lastURL          string
+}
+
+func (m *mockBrowserNavigatorWithScreenshot) Navigate(params map[string]interface{}) (string, error) {
+	if url, ok := params["url"].(string); ok {
+		m.lastURL = url
+	}
+	return m.navigateResult, m.navigateErr
+}
+
+func (m *mockBrowserNavigatorWithScreenshot) Screenshot(params map[string]interface{}) (string, error) {
+	return m.screenshotResult, m.screenshotErr
 }
 
 type mockCompactor struct {
