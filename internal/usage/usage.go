@@ -16,6 +16,11 @@ type Stats struct {
 	ModelsUsed   map[string]int
 	FirstRequest time.Time
 	LastRequest  time.Time
+	// Context window tracking
+	ContextTokens     int       // Current context window size (estimated)
+	MaxContextTokens  int       // Maximum context window configured
+	LastCompaction    time.Time // Last time context was compacted
+	CompactionCount   int       // Number of times context was compacted
 }
 
 // String returns a human-readable summary of usage
@@ -35,6 +40,26 @@ func (s *Stats) String() string {
 		sb.WriteString("\n🤖 Models Used:\n")
 		for model, count := range s.ModelsUsed {
 			sb.WriteString(fmt.Sprintf("   • %s: %d requests\n", model, count))
+		}
+	}
+
+	// Context window info
+	if s.MaxContextTokens > 0 {
+		sb.WriteString("\n📐 *Context Window*\n")
+		usedPercent := float64(s.ContextTokens) / float64(s.MaxContextTokens) * 100
+		sb.WriteString(fmt.Sprintf("   Used: %dk / %dk (%.0f%%)\n", 
+			s.ContextTokens/1000, s.MaxContextTokens/1000, usedPercent))
+		
+		// Warning if approaching limit
+		if usedPercent > 75 {
+			sb.WriteString("   ⚠️ Approaching context limit - will compact soon\n")
+		}
+		
+		if s.CompactionCount > 0 {
+			sb.WriteString(fmt.Sprintf("   📦 Compacted: %d times\n", s.CompactionCount))
+			if !s.LastCompaction.IsZero() {
+				sb.WriteString(fmt.Sprintf("   Last: %s ago\n", formatDuration(time.Since(s.LastCompaction))))
+			}
 		}
 	}
 
@@ -104,19 +129,23 @@ func (t *Tracker) Get(channel, userID string) *Stats {
 	}
 
 	// Return a copy to avoid race conditions
-	copy := &Stats{
-		InputTokens:  stats.InputTokens,
-		OutputTokens: stats.OutputTokens,
-		TotalTokens:  stats.TotalTokens,
-		RequestCount: stats.RequestCount,
-		FirstRequest: stats.FirstRequest,
-		LastRequest:  stats.LastRequest,
-		ModelsUsed:   make(map[string]int),
+	statsCopy := &Stats{
+		InputTokens:      stats.InputTokens,
+		OutputTokens:     stats.OutputTokens,
+		TotalTokens:      stats.TotalTokens,
+		RequestCount:     stats.RequestCount,
+		FirstRequest:     stats.FirstRequest,
+		LastRequest:      stats.LastRequest,
+		ModelsUsed:       make(map[string]int),
+		ContextTokens:    stats.ContextTokens,
+		MaxContextTokens: stats.MaxContextTokens,
+		LastCompaction:   stats.LastCompaction,
+		CompactionCount:  stats.CompactionCount,
 	}
 	for k, v := range stats.ModelsUsed {
-		copy.ModelsUsed[k] = v
+		statsCopy.ModelsUsed[k] = v
 	}
-	return copy
+	return statsCopy
 }
 
 // Reset clears usage stats for a session
@@ -126,6 +155,44 @@ func (t *Tracker) Reset(channel, userID string) {
 
 	key := sessionKey(channel, userID)
 	delete(t.stats, key)
+}
+
+// UpdateContextWindow updates the context window tracking for a session
+func (t *Tracker) UpdateContextWindow(channel, userID string, contextTokens, maxTokens int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	key := sessionKey(channel, userID)
+	stats, exists := t.stats[key]
+	if !exists {
+		stats = &Stats{
+			ModelsUsed:   make(map[string]int),
+			FirstRequest: time.Now(),
+		}
+		t.stats[key] = stats
+	}
+
+	stats.ContextTokens = contextTokens
+	stats.MaxContextTokens = maxTokens
+}
+
+// RecordCompaction records that context compaction occurred
+func (t *Tracker) RecordCompaction(channel, userID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	key := sessionKey(channel, userID)
+	stats, exists := t.stats[key]
+	if !exists {
+		stats = &Stats{
+			ModelsUsed:   make(map[string]int),
+			FirstRequest: time.Now(),
+		}
+		t.stats[key] = stats
+	}
+
+	stats.CompactionCount++
+	stats.LastCompaction = time.Now()
 }
 
 // GetGlobal returns aggregated stats across all sessions

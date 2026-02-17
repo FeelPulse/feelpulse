@@ -157,3 +157,69 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestContextWindowTracking(t *testing.T) {
+	tracker := NewTracker()
+
+	// Update context window
+	tracker.UpdateContextWindow("telegram", "user123", 50000, 80000)
+
+	stats := tracker.Get("telegram", "user123")
+	if stats.ContextTokens != 50000 {
+		t.Errorf("ContextTokens = %d, want 50000", stats.ContextTokens)
+	}
+	if stats.MaxContextTokens != 80000 {
+		t.Errorf("MaxContextTokens = %d, want 80000", stats.MaxContextTokens)
+	}
+}
+
+func TestCompactionTracking(t *testing.T) {
+	tracker := NewTracker()
+
+	// Record compaction
+	tracker.RecordCompaction("telegram", "user123")
+	tracker.RecordCompaction("telegram", "user123")
+
+	stats := tracker.Get("telegram", "user123")
+	if stats.CompactionCount != 2 {
+		t.Errorf("CompactionCount = %d, want 2", stats.CompactionCount)
+	}
+	if stats.LastCompaction.IsZero() {
+		t.Error("LastCompaction should not be zero")
+	}
+}
+
+func TestStatsStringWithContextWindow(t *testing.T) {
+	tracker := NewTracker()
+	tracker.Record("telegram", "user123", 100, 50, "claude")
+	tracker.UpdateContextWindow("telegram", "user123", 60000, 80000)
+	tracker.RecordCompaction("telegram", "user123")
+
+	stats := tracker.Get("telegram", "user123")
+	str := stats.String()
+
+	// Should contain context window info
+	if !containsSubstring(str, "Context Window") {
+		t.Error("Should contain Context Window section")
+	}
+	if !containsSubstring(str, "60k") {
+		t.Error("Should contain context tokens (60k)")
+	}
+	if !containsSubstring(str, "80k") {
+		t.Error("Should contain max tokens (80k)")
+	}
+}
+
+func TestStatsStringContextWarning(t *testing.T) {
+	tracker := NewTracker()
+	tracker.Record("telegram", "user123", 100, 50, "claude")
+	// Set context to >75% to trigger warning
+	tracker.UpdateContextWindow("telegram", "user123", 65000, 80000)
+
+	stats := tracker.Get("telegram", "user123")
+	str := stats.String()
+
+	if !containsSubstring(str, "⚠️") {
+		t.Error("Should contain warning emoji when >75% context used")
+	}
+}

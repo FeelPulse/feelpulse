@@ -464,6 +464,7 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	history := sess.GetAllMessages()
 
 	// Compact history if needed (summarize old messages)
+	maxContextTokens := session.DefaultMaxContextTokens
 	if compactor != nil {
 		compacted, err := compactor.CompactIfNeeded(history)
 		if err != nil {
@@ -471,7 +472,17 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 		} else if len(compacted) < len(history) {
 			log.Printf("📦 Compacted history: %d → %d messages", len(history), len(compacted))
 			history = compacted
+			// Track compaction
+			if gw.usage != nil {
+				gw.usage.RecordCompaction(msg.Channel, userID)
+			}
 		}
+	}
+
+	// Track context window usage
+	if gw.usage != nil {
+		contextTokens := session.EstimateHistoryTokens(history)
+		gw.usage.UpdateContextWindow(msg.Channel, userID, contextTokens, maxContextTokens)
 	}
 
 	// Route to agent with streaming callback
@@ -553,6 +564,7 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	history := sess.GetAllMessages()
 
 	// Compact history if needed (summarize old messages)
+	maxContextTokens := session.DefaultMaxContextTokens
 	if compactor != nil {
 		compacted, err := compactor.CompactIfNeeded(history)
 		if err != nil {
@@ -560,7 +572,17 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 		} else if len(compacted) < len(history) {
 			log.Printf("📦 Compacted history: %d → %d messages", len(history), len(compacted))
 			history = compacted
+			// Track compaction
+			if gw.usage != nil {
+				gw.usage.RecordCompaction(msg.Channel, userID)
+			}
 		}
+	}
+
+	// Track context window usage
+	if gw.usage != nil {
+		contextTokens := session.EstimateHistoryTokens(history)
+		gw.usage.UpdateContextWindow(msg.Channel, userID, contextTokens, maxContextTokens)
 	}
 
 	// Route to agent with full history
