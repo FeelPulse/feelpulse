@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -20,7 +20,9 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/heartbeat"
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/internal/memory"
+	"github.com/FeelPulse/feelpulse/internal/metrics"
 	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/internal/store"
@@ -47,6 +49,8 @@ type Gateway struct {
 	usage          *usage.Tracker
 	browser        *browser.Browser
 	toolRegistry   *tools.Registry
+	log            *logger.Logger
+	metrics        *metrics.Collector
 	startTime      time.Time
 	lastMessageAt  time.Time
 	cancelCtx      context.CancelFunc
@@ -56,16 +60,23 @@ type Gateway struct {
 }
 
 func New(cfg *config.Config) *Gateway {
+	// Initialize logger
+	log := logger.New(&logger.Config{
+		Level:     cfg.Log.Level,
+		Component: "gateway",
+	})
+	logger.SetDefaultLogger(log)
+
 	sessions := session.NewStore()
 
 	// Initialize SQLite session persistence
 	dbPath := store.DefaultDBPath()
 	sqliteStore, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
-		log.Printf("⚠️  Failed to initialize session database: %v", err)
+		log.Warn("Failed to initialize session database: %v", err)
 	} else {
 		if err := sessions.SetPersister(sqliteStore); err != nil {
-			log.Printf("⚠️  Failed to load persisted sessions: %v", err)
+			log.Warn("Failed to load persisted sessions: %v", err)
 		}
 	}
 
@@ -76,23 +87,34 @@ func New(cfg *config.Config) *Gateway {
 	}
 	memMgr := memory.NewManager(workspacePath)
 	if err := memMgr.Load(); err != nil {
-		log.Printf("⚠️  Failed to load workspace files: %v", err)
+		log.Warn("Failed to load workspace files: %v", err)
 	} else if memMgr.Soul() != "" || memMgr.User() != "" || memMgr.Memory() != "" {
-		log.Printf("📂 Workspace loaded from %s", workspacePath)
+		log.Info("📂 Workspace loaded from %s", workspacePath)
 	}
 
 	// Initialize rate limiter
 	limiter := ratelimit.New(cfg.Agent.RateLimit)
 	if cfg.Agent.RateLimit > 0 {
-		log.Printf("⏱️  Rate limiting enabled: %d messages/minute", cfg.Agent.RateLimit)
+		log.Info("⏱️  Rate limiting enabled: %d messages/minute", cfg.Agent.RateLimit)
 	}
 
 	// Initialize usage tracker
 	usageTracker := usage.NewTracker()
 
-	// Initialize tool registry with built-in tools
+	// Initialize metrics collector
+	metricsCollector := metrics.NewCollector()
+
+	// Initialize tool registry with built-in tools (exec with security config)
 	toolRegistry := tools.NewRegistry()
-	tools.RegisterBuiltins(toolRegistry)
+	execCfg := &tools.ExecConfig{
+		Enabled:         cfg.Tools.Exec.Enabled,
+		AllowedCommands: cfg.Tools.Exec.AllowedCommands,
+		TimeoutSeconds:  cfg.Tools.Exec.TimeoutSeconds,
+	}
+	tools.RegisterBuiltinsWithExec(toolRegistry, execCfg)
+	if cfg.Tools.Exec.Enabled {
+		log.Info("🔧 Exec tool enabled with %d allowed commands", len(cfg.Tools.Exec.AllowedCommands))
+	}
 
 	gw := &Gateway{
 		cfg:          cfg,
@@ -104,6 +126,8 @@ func New(cfg *config.Config) *Gateway {
 		limiter:      limiter,
 		usage:        usageTracker,
 		toolRegistry: toolRegistry,
+		log:          log,
+		metrics:      metricsCollector,
 		startTime:    time.Now(),
 		shutdownCh:   make(chan struct{}),
 	}
@@ -117,6 +141,15 @@ func (gw *Gateway) setupRoutes() {
 	gw.mux.HandleFunc("/hooks/", gw.handleHook)
 	gw.mux.HandleFunc("/v1/chat/completions", gw.handleOpenAIChatCompletion)
 	gw.mux.HandleFunc("/dashboard", gw.handleDashboard)
+
+	// Metrics endpoint
+	if gw.cfg.Metrics.Enabled {
+		metricsPath := gw.cfg.Metrics.Path
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+		gw.mux.HandleFunc(metricsPath, gw.handleMetrics)
+	}
 }
 
 func (gw *Gateway) Start() error {
@@ -155,7 +188,7 @@ func (gw *Gateway) Start() error {
 		gw.gracefulShutdown(cancel)
 	}()
 
-	log.Printf("🫀 Gateway listening on %s", addr)
+	gw.log.Info("🫀 Gateway listening on %s", addr)
 	return gw.server.ListenAndServe()
 }
 
@@ -172,11 +205,11 @@ func (gw *Gateway) gracefulShutdown(cancel context.CancelFunc) {
 	gw.mu.RUnlock()
 	if telegram != nil {
 		telegram.Stop()
-		log.Printf("📱 Telegram bot stopped")
+		gw.log.Info("📱 Telegram bot stopped")
 	}
 
 	// Wait for active message processing to complete (with timeout)
-	log.Printf("⏳ Waiting for active requests to complete...")
+	gw.log.Info("⏳ Waiting for active requests to complete...")
 	done := make(chan struct{})
 	go func() {
 		gw.activeRequests.Wait()
@@ -185,9 +218,9 @@ func (gw *Gateway) gracefulShutdown(cancel context.CancelFunc) {
 
 	select {
 	case <-done:
-		log.Printf("✅ All active requests completed")
+		gw.log.Info("✅ All active requests completed")
 	case <-time.After(30 * time.Second):
-		log.Printf("⚠️  Timeout waiting for requests, forcing shutdown")
+		gw.log.Warn("Timeout waiting for requests, forcing shutdown")
 	}
 
 	// Stop background services
@@ -202,22 +235,22 @@ func (gw *Gateway) gracefulShutdown(cancel context.CancelFunc) {
 	if gw.db != nil {
 		savedCount := gw.saveAllSessions()
 		if savedCount > 0 {
-			log.Printf("💾 Sessions saved: %d", savedCount)
+			gw.log.Info("💾 Sessions saved: %d", savedCount)
 		}
 	}
 
 	// Close browser
 	if gw.browser != nil {
 		gw.browser.Close()
-		log.Printf("🌐 Browser closed")
+		gw.log.Info("🌐 Browser closed")
 	}
 
 	// Close database connection
 	if gw.db != nil {
 		if err := gw.db.Close(); err != nil {
-			log.Printf("⚠️  Error closing database: %v", err)
+			gw.log.Warn("Error closing database: %v", err)
 		} else {
-			log.Printf("💾 Database connection closed")
+			gw.log.Info("💾 Database connection closed")
 		}
 	}
 
@@ -225,7 +258,7 @@ func (gw *Gateway) gracefulShutdown(cancel context.CancelFunc) {
 	cancel()
 	gw.server.Close()
 
-	log.Printf("👋 Shutdown complete")
+	gw.log.Info("👋 Shutdown complete")
 }
 
 // saveAllSessions saves all active sessions to the database
@@ -247,7 +280,7 @@ func (gw *Gateway) saveAllSessions() int {
 		profile := sess.GetProfile()
 
 		if err := gw.db.SaveWithProfile(sess.Key, messages, model, profile); err != nil {
-			log.Printf("⚠️  Failed to save session %s: %v", sess.Key, err)
+			gw.log.Warn("Failed to save session %s: %v", sess.Key, err)
 		} else {
 			count++
 		}
@@ -264,7 +297,7 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 
 	router, err := agent.NewRouter(gw.cfg)
 	if err != nil {
-		log.Printf("⚠️  Agent not configured: %v", err)
+		gw.log.Warn("Agent not configured: %v", err)
 		return
 	}
 
@@ -276,7 +309,7 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 		router.SetToolRegistry(gw.toolRegistry)
 		toolCount := len(gw.toolRegistry.List())
 		if toolCount > 0 {
-			log.Printf("🔧 Tool registry attached with %d tools", toolCount)
+			gw.log.Info("🔧 Tool registry attached with %d tools", toolCount)
 		}
 	}
 
@@ -284,7 +317,7 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 	gw.router = router
 	gw.mu.Unlock()
 
-	log.Printf("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
+	gw.log.Info("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
 
 	// Initialize compactor with summarizer
 	if anthropicClient, ok := router.Agent().(*agent.AnthropicClient); ok {
@@ -296,7 +329,7 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 		gw.mu.Lock()
 		gw.compactor = session.NewCompactor(summarizer, maxTokens, session.DefaultKeepLastN)
 		gw.mu.Unlock()
-		log.Printf("📦 Context compaction enabled (threshold: %dk tokens)", maxTokens/1000)
+		gw.log.Info("📦 Context compaction enabled (threshold: %dk tokens)", maxTokens/1000)
 	}
 }
 
@@ -313,11 +346,11 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	telegram.SetAllowedUsers(gw.cfg.Channels.Telegram.AllowedUsers)
 
 	if len(gw.cfg.Channels.Telegram.AllowedUsers) > 0 {
-		log.Printf("🔒 Telegram allowlist: %v", gw.cfg.Channels.Telegram.AllowedUsers)
+		gw.log.Info("🔒 Telegram allowlist: %v", gw.cfg.Channels.Telegram.AllowedUsers)
 	}
 
 	if err := telegram.Start(ctx); err != nil {
-		log.Printf("⚠️  Failed to start telegram: %v", err)
+		gw.log.Warn("Failed to start telegram: %v", err)
 		return
 	}
 
@@ -325,7 +358,7 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	gw.telegram = telegram
 	gw.mu.Unlock()
 
-	log.Printf("📱 Telegram streaming enabled for responsive UX")
+	gw.log.Info("📱 Telegram streaming enabled for responsive UX")
 }
 
 // initializeHeartbeat sets up the heartbeat service
@@ -354,9 +387,9 @@ func (gw *Gateway) initializeHeartbeat() {
 
 		if telegram != nil && ch == "telegram" {
 			if err := telegram.SendMessage(userID, message, true); err != nil {
-				log.Printf("⚠️ Failed to send heartbeat to %d: %v", userID, err)
+				gw.log.Warn("Failed to send heartbeat to %d: %v", userID, err)
 			} else {
-				log.Printf("💓 Sent heartbeat to user %d", userID)
+				gw.log.Debug("💓 Sent heartbeat to user %d", userID)
 			}
 		}
 	})
@@ -379,7 +412,7 @@ func (gw *Gateway) initializeBrowser() {
 
 	b, err := browser.New(cfg)
 	if err != nil {
-		log.Printf("⚠️  Browser tools disabled: %v", err)
+		gw.log.Warn("Browser tools disabled: %v", err)
 		return
 	}
 
@@ -387,7 +420,7 @@ func (gw *Gateway) initializeBrowser() {
 	b.SetScreenshotCallback(func(path string) error {
 		// This callback is called when a screenshot is taken
 		// We'll handle sending in the message handler based on context
-		log.Printf("📸 Screenshot saved: %s", path)
+		gw.log.Debug("📸 Screenshot saved: %s", path)
 		return nil
 	})
 
@@ -398,7 +431,7 @@ func (gw *Gateway) initializeBrowser() {
 		gw.registerBrowserTools(b)
 	}
 
-	log.Printf("🌐 Browser automation enabled (headless=%v, stealth=%v)", cfg.Headless, cfg.Stealth)
+	gw.log.Info("🌐 Browser automation enabled (headless=%v, stealth=%v)", cfg.Headless, cfg.Stealth)
 }
 
 // registerBrowserTools registers all browser tools with the tool registry
@@ -422,7 +455,7 @@ func (gw *Gateway) registerBrowserTools(b *browser.Browser) {
 		})
 	})
 
-	log.Printf("🔧 Registered %d browser tools", 6)
+	gw.log.Info("🔧 Registered %d browser tools", 6)
 }
 
 // wireCommandHandler wires up optional command handler dependencies
@@ -462,25 +495,31 @@ func (gw *Gateway) startConfigWatcher(ctx context.Context) {
 		gw.handleConfigReload(ctx)
 	})
 	gw.watcher.Start()
-	log.Printf("👁️  Watching config for changes: %s", configPath)
+	gw.log.Info("👁️  Watching config for changes: %s", configPath)
 }
 
 // handleConfigReload handles config file changes
 func (gw *Gateway) handleConfigReload(ctx context.Context) {
 	newCfg, err := config.Load()
 	if err != nil {
-		log.Printf("⚠️  Failed to reload config: %v", err)
+		gw.log.Warn("Failed to reload config: %v", err)
 		return
 	}
 
-	log.Printf("🔄 Config reloaded")
+	gw.log.Info("🔄 Config reloaded")
 
 	oldCfg := gw.cfg
 	gw.cfg = newCfg
 
+	// Update log level if changed
+	if oldCfg.Log.Level != newCfg.Log.Level {
+		gw.log.SetLevel(logger.ParseLevel(newCfg.Log.Level))
+		gw.log.Info("Log level changed to: %s", newCfg.Log.Level)
+	}
+
 	// Reload workspace files
 	if err := gw.memory.Load(); err != nil {
-		log.Printf("⚠️  Failed to reload workspace files: %v", err)
+		gw.log.Warn("Failed to reload workspace files: %v", err)
 	}
 
 	// Check if agent needs reinitialization
@@ -490,7 +529,7 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 		oldCfg.Agent.Provider != newCfg.Agent.Provider
 
 	if agentChanged {
-		log.Printf("🔄 Reinitializing agent...")
+		gw.log.Info("🔄 Reinitializing agent...")
 		gw.initializeAgent(ctx)
 	}
 
@@ -499,7 +538,7 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 		oldCfg.Channels.Telegram.Enabled != newCfg.Channels.Telegram.Enabled
 
 	if telegramChanged {
-		log.Printf("🔄 Reinitializing Telegram...")
+		gw.log.Info("🔄 Reinitializing Telegram...")
 		gw.mu.Lock()
 		oldTelegram := gw.telegram
 		gw.telegram = nil
@@ -517,7 +556,7 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 		if telegram != nil {
 			telegram.SetAllowedUsers(newCfg.Channels.Telegram.AllowedUsers)
 			if len(newCfg.Channels.Telegram.AllowedUsers) > 0 {
-				log.Printf("🔒 Telegram allowlist updated: %v", newCfg.Channels.Telegram.AllowedUsers)
+				gw.log.Info("🔒 Telegram allowlist updated: %v", newCfg.Channels.Telegram.AllowedUsers)
 			}
 		}
 	}
@@ -529,9 +568,9 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 	if oldCfg.Agent.RateLimit != newCfg.Agent.RateLimit {
 		gw.limiter = ratelimit.New(newCfg.Agent.RateLimit)
 		if newCfg.Agent.RateLimit > 0 {
-			log.Printf("⏱️  Rate limit updated: %d messages/minute", newCfg.Agent.RateLimit)
+			gw.log.Info("⏱️  Rate limit updated: %d messages/minute", newCfg.Agent.RateLimit)
 		} else {
-			log.Printf("⏱️  Rate limiting disabled")
+			gw.log.Info("⏱️  Rate limiting disabled")
 		}
 	}
 }
@@ -558,10 +597,17 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	gw.lastMessageAt = time.Now()
 	gw.mu.Unlock()
 
+	// Track message in metrics
+	gw.metrics.IncrementMessages(msg.Channel)
+	gw.metrics.SetActiveSessions(gw.sessions.Count())
+
+	userID := gw.getUserID(msg)
+	reqLog := gw.log.WithComponent("message").WithRequestID(userID)
+
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("❌ panic in handleMessageStreaming: %v", r)
+			reqLog.Error("panic in handleMessageStreaming: %v", r)
 			reply = &types.Message{
 				Text:    "❌ An unexpected error occurred. Please try again.",
 				Channel: msg.Channel,
@@ -570,6 +616,8 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 			err = nil // Return gracefully instead of crashing
 		}
 	}()
+
+	reqLog.Info("Processing message from %s", msg.From)
 
 	// Register user for heartbeat (if enabled)
 	if gw.heartbeat != nil {
@@ -584,9 +632,8 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	}
 
 	// Check rate limit
-	userID := gw.getUserID(msg)
 	if !gw.limiter.Allow(userID) {
-		log.Printf("⏱️  Rate limited: %s", userID)
+		reqLog.Info("Rate limited")
 		return &types.Message{
 			Text:    "⏱ Rate limit exceeded. Please wait a moment.",
 			Channel: msg.Channel,
@@ -622,9 +669,9 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	if compactor != nil {
 		compacted, err := compactor.CompactIfNeeded(history)
 		if err != nil {
-			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
+			reqLog.Warn("Compaction failed: %v (using full history)", err)
 		} else if len(compacted) < len(history) {
-			log.Printf("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
+			reqLog.Info("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
 			history = compacted
 			// Track compaction
 			if gw.usage != nil {
@@ -642,12 +689,21 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 	// Route to agent with streaming callback
 	reply, err = router.ProcessWithHistoryStream(history, agent.StreamCallback(onDelta))
 	if err != nil {
-		log.Printf("❌ Agent error: %v", err)
+		reqLog.Error("Agent error: %v", err)
 		return &types.Message{
 			Text:    "❌ Sorry, I encountered an error processing your message.",
 			Channel: msg.Channel,
 			IsBot:   true,
 		}, nil
+	}
+
+	// Track token usage in metrics
+	if reply.Metadata != nil {
+		if input, ok := reply.Metadata["input_tokens"].(int); ok {
+			if output, ok := reply.Metadata["output_tokens"].(int); ok {
+				gw.metrics.AddTokens(input, output)
+			}
+		}
 	}
 
 	// Add bot reply to session history (and persist)
@@ -678,10 +734,17 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	gw.lastMessageAt = time.Now()
 	gw.mu.Unlock()
 
+	// Track message in metrics
+	gw.metrics.IncrementMessages(msg.Channel)
+	gw.metrics.SetActiveSessions(gw.sessions.Count())
+
+	userID := gw.getUserID(msg)
+	reqLog := gw.log.WithComponent("message").WithRequestID(userID)
+
 	// Panic recovery - ensure we don't crash from unexpected panics
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("❌ panic in handleMessage: %v", r)
+			reqLog.Error("panic in handleMessage: %v", r)
 			reply = &types.Message{
 				Text:    "❌ An unexpected error occurred. Please try again.",
 				Channel: msg.Channel,
@@ -690,6 +753,8 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 			err = nil // Return gracefully instead of crashing
 		}
 	}()
+
+	reqLog.Info("Processing message from %s", msg.From)
 
 	// Register user for heartbeat (if enabled)
 	if gw.heartbeat != nil {
@@ -704,9 +769,8 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	}
 
 	// Check rate limit
-	userID := gw.getUserID(msg)
 	if !gw.limiter.Allow(userID) {
-		log.Printf("⏱️  Rate limited: %s", userID)
+		reqLog.Info("Rate limited")
 		return &types.Message{
 			Text:    "⏱ Rate limit exceeded. Please wait a moment.",
 			Channel: msg.Channel,
@@ -742,9 +806,9 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	if compactor != nil {
 		compacted, err := compactor.CompactIfNeeded(history)
 		if err != nil {
-			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
+			reqLog.Warn("Compaction failed: %v (using full history)", err)
 		} else if len(compacted) < len(history) {
-			log.Printf("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
+			reqLog.Info("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
 			history = compacted
 			// Track compaction
 			if gw.usage != nil {
@@ -762,12 +826,21 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 	// Route to agent with full history
 	reply, err = router.ProcessWithHistory(history)
 	if err != nil {
-		log.Printf("❌ Agent error: %v", err)
+		reqLog.Error("Agent error: %v", err)
 		return &types.Message{
 			Text:    "❌ Sorry, I encountered an error processing your message.",
 			Channel: msg.Channel,
 			IsBot:   true,
 		}, nil
+	}
+
+	// Track token usage in metrics
+	if reply.Metadata != nil {
+		if input, ok := reply.Metadata["input_tokens"].(int); ok {
+			if output, ok := reply.Metadata["output_tokens"].(int); ok {
+				gw.metrics.AddTokens(input, output)
+			}
+		}
 	}
 
 	// Add bot reply to session history (and persist)
@@ -912,7 +985,7 @@ func (gw *Gateway) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("📨 Hook received: %s", r.URL.Path)
+	gw.log.Info("📨 Hook received: %s", r.URL.Path)
 
 	// TODO: Route to agent based on hook mappings
 
@@ -920,4 +993,53 @@ func (gw *Gateway) handleHook(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"ok": true,
 	})
+}
+
+// handleMetrics returns Prometheus-compatible metrics
+func (gw *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Update active sessions count before returning metrics
+	gw.metrics.SetActiveSessions(gw.sessions.Count())
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	gw.metrics.WritePrometheus(w)
+}
+
+// GetAdminUsername returns the admin username (for admin commands)
+func (gw *Gateway) GetAdminUsername() string {
+	// Configured admin username takes priority
+	if gw.cfg.Admin.Username != "" {
+		return gw.cfg.Admin.Username
+	}
+	// Default to first allowed Telegram user
+	if len(gw.cfg.Channels.Telegram.AllowedUsers) > 0 {
+		return gw.cfg.Channels.Telegram.AllowedUsers[0]
+	}
+	return ""
+}
+
+// GetSystemStats returns system statistics for admin commands
+func (gw *Gateway) GetSystemStats() map[string]any {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	return map[string]any{
+		"uptime":          formatDuration(time.Since(gw.startTime)),
+		"uptime_seconds":  int(time.Since(gw.startTime).Seconds()),
+		"goroutines":      runtime.NumGoroutine(),
+		"memory_alloc_mb": m.Alloc / 1024 / 1024,
+		"memory_sys_mb":   m.Sys / 1024 / 1024,
+		"sessions":        gw.sessions.Count(),
+		"gc_cycles":       m.NumGC,
+	}
+}
+
+// GetAllSessions returns all active sessions for admin commands
+func (gw *Gateway) GetAllSessions() []*session.Session {
+	return gw.sessions.GetRecent(1000)
+}
+
+// ReloadConfig triggers a config reload
+func (gw *Gateway) ReloadConfig(ctx context.Context) error {
+	gw.handleConfigReload(ctx)
+	return nil
 }

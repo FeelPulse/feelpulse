@@ -9,14 +9,57 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
 
+// ExecConfig holds security configuration for the exec tool
+type ExecConfig struct {
+	Enabled         bool
+	AllowedCommands []string
+	TimeoutSeconds  int
+}
+
+// DefaultExecConfig returns the default (disabled) exec configuration
+func DefaultExecConfig() *ExecConfig {
+	return &ExecConfig{
+		Enabled:         false,
+		AllowedCommands: []string{},
+		TimeoutSeconds:  30,
+	}
+}
+
+// dangerousPatterns are blocked regardless of allowlist
+var dangerousPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\brm\s+(-rf|-fr|--recursive)?\s*(\/|~|\$HOME|\$PWD|\*)`), // rm -rf dangerous paths
+	regexp.MustCompile(`(?i)\bsudo\b`),                                                // sudo
+	regexp.MustCompile(`(?i)\bsu\s+-`),                                                // su -
+	regexp.MustCompile(`\.\./`),                                                       // path traversal
+	regexp.MustCompile(`(?i)\b(curl|wget)\b.*\|\s*(ba)?sh`),                           // curl | sh
+	regexp.MustCompile(`(?i)\bchmod\s+(777|[+]?[aou][+][rwx]s)`),                       // chmod dangerous perms
+	regexp.MustCompile(`(?i)\bdd\s+.*of=/dev/`),                                        // dd to device
+	regexp.MustCompile(`(?i)\bmkfs\b`),                                                 // filesystem format
+	regexp.MustCompile(`(?i)\b(reboot|shutdown|halt|poweroff)\b`),                      // system control
+	regexp.MustCompile(`(?i)>[>&]?\s*/etc/`),                                           // writing to /etc
+	regexp.MustCompile(`(?i)>[>&]?\s*/dev/`),                                           // writing to /dev
+}
+
 // RegisterBuiltins registers all built-in tools
 func RegisterBuiltins(r *Registry) {
-	r.Register(execTool())
+	// Note: exec tool is NOT registered by default for security
+	// Use RegisterBuiltinsWithExec to enable it with proper configuration
 	r.Register(webSearchTool())
+}
+
+// RegisterBuiltinsWithExec registers built-in tools including exec with security config
+func RegisterBuiltinsWithExec(r *Registry, execCfg *ExecConfig) {
+	r.Register(webSearchTool())
+
+	// Only register exec if explicitly enabled
+	if execCfg != nil && execCfg.Enabled {
+		r.Register(execToolSecure(execCfg))
+	}
 }
 
 // BrowserToolRegistrar is an interface for browser tool registration
@@ -25,16 +68,55 @@ type BrowserToolRegistrar interface {
 	RegisterBrowserTools(r *Registry)
 }
 
-// execTool creates the exec tool for running shell commands
-func execTool() *Tool {
+// validateExecCommand checks if a command is allowed
+func validateExecCommand(cmdStr string, allowedCommands []string) error {
+	// First check for dangerous patterns (blocked regardless of allowlist)
+	for _, pattern := range dangerousPatterns {
+		if pattern.MatchString(cmdStr) {
+			return fmt.Errorf("command contains blocked pattern: security policy violation")
+		}
+	}
+
+	// If no allowlist configured, deny all
+	if len(allowedCommands) == 0 {
+		return fmt.Errorf("exec tool has no allowed commands configured")
+	}
+
+	// Extract the first word (command name) from the command string
+	cmdStr = strings.TrimSpace(cmdStr)
+	cmdParts := strings.Fields(cmdStr)
+	if len(cmdParts) == 0 {
+		return fmt.Errorf("empty command")
+	}
+
+	cmdName := cmdParts[0]
+
+	// Check if command is in allowlist
+	for _, allowed := range allowedCommands {
+		// Support prefix matching (e.g., "git" allows "git status", "git log", etc.)
+		if cmdName == allowed || strings.HasPrefix(cmdName, allowed+"/") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("command '%s' is not in the allowed commands list", cmdName)
+}
+
+// execToolSecure creates the exec tool with security controls
+func execToolSecure(cfg *ExecConfig) *Tool {
+	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
 	return &Tool{
 		Name:        "exec",
-		Description: "Execute a shell command and return the output. Use for system operations, file manipulation, or running scripts.",
+		Description: "Execute a shell command and return the output. Only allowed commands can be run (configured by admin).",
 		Parameters: []Parameter{
 			{
 				Name:        "command",
 				Type:        "string",
-				Description: "The shell command to execute",
+				Description: "The shell command to execute (must be in allowed commands list)",
 				Required:    true,
 			},
 		},
@@ -44,8 +126,17 @@ func execTool() *Tool {
 				return "", fmt.Errorf("command parameter is required")
 			}
 
-			// Create command with context for timeout
-			cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+			// Validate command against security policy
+			if err := validateExecCommand(cmdStr, cfg.AllowedCommands); err != nil {
+				return "", err
+			}
+
+			// Create context with timeout
+			execCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			// Create command
+			cmd := exec.CommandContext(execCtx, "sh", "-c", cmdStr)
 
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
@@ -62,8 +153,8 @@ func execTool() *Tool {
 			}
 
 			if err != nil {
-				if ctx.Err() == context.DeadlineExceeded {
-					return "", fmt.Errorf("command timed out")
+				if execCtx.Err() == context.DeadlineExceeded {
+					return "", fmt.Errorf("command timed out after %v", timeout)
 				}
 				if result == "" {
 					return "", fmt.Errorf("command failed: %v", err)
@@ -81,6 +172,16 @@ func execTool() *Tool {
 			return strings.TrimSpace(result), nil
 		},
 	}
+}
+
+// execTool creates the exec tool for running shell commands (DEPRECATED - use execToolSecure)
+// Kept for backward compatibility but should not be used directly
+func execTool() *Tool {
+	return execToolSecure(&ExecConfig{
+		Enabled:         true,
+		AllowedCommands: []string{}, // Empty = deny all
+		TimeoutSeconds:  30,
+	})
 }
 
 // webSearchTool creates the web search tool

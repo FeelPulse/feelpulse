@@ -17,6 +17,38 @@ type Config struct {
 	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
 	TTS       TTSConfig       `yaml:"tts"`
 	Browser   BrowserConfig   `yaml:"browser"`
+	Tools     ToolsConfig     `yaml:"tools"`
+	Log       LogConfig       `yaml:"log"`
+	Admin     AdminConfig     `yaml:"admin"`
+	Metrics   MetricsConfig   `yaml:"metrics"`
+}
+
+// LogConfig holds logging configuration
+type LogConfig struct {
+	Level string `yaml:"level"` // debug, info, warn, error (default: info)
+}
+
+// AdminConfig holds admin user configuration
+type AdminConfig struct {
+	Username string `yaml:"username"` // Admin username (defaults to first allowedUser)
+}
+
+// MetricsConfig holds metrics endpoint configuration
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"` // Enable /metrics endpoint
+	Path    string `yaml:"path"`    // Metrics endpoint path (default: /metrics)
+}
+
+// ToolsConfig holds tool-specific configuration
+type ToolsConfig struct {
+	Exec ExecToolConfig `yaml:"exec"`
+}
+
+// ExecToolConfig holds exec tool security settings
+type ExecToolConfig struct {
+	Enabled         bool     `yaml:"enabled"`         // Enable exec tool (default: false for safety)
+	AllowedCommands []string `yaml:"allowedCommands"` // Allowed command prefixes (e.g., ["ls", "cat", "echo"])
+	TimeoutSeconds  int      `yaml:"timeoutSeconds"`  // Command timeout (default: 30)
 }
 
 type HeartbeatConfig struct {
@@ -119,6 +151,23 @@ func Default() *Config {
 			Headless:       true,
 			TimeoutSeconds: 30,
 			Stealth:        true,
+		},
+		Tools: ToolsConfig{
+			Exec: ExecToolConfig{
+				Enabled:         false, // Disabled by default for security
+				AllowedCommands: []string{},
+				TimeoutSeconds:  30,
+			},
+		},
+		Log: LogConfig{
+			Level: "info",
+		},
+		Admin: AdminConfig{
+			Username: "", // Will default to first allowedUser
+		},
+		Metrics: MetricsConfig{
+			Enabled: true,
+			Path:    "/metrics",
 		},
 	}
 }

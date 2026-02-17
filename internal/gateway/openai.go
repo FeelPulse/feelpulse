@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -123,14 +122,26 @@ func (gw *Gateway) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Req
 
 	// Map model name if it's an OpenAI model
 	model := mapToAnthropicModel(req.Model)
-	log.Printf("📡 OpenAI API: model=%s → %s, messages=%d", req.Model, model, len(messages))
+	gw.log.Info("📡 OpenAI API: model=%s → %s, messages=%d", req.Model, model, len(messages))
+
+	// Track metrics
+	gw.metrics.IncrementMessages("api")
 
 	// Process with the agent
 	reply, err := router.ProcessWithHistory(messages)
 	if err != nil {
-		log.Printf("❌ OpenAI API error: %v", err)
+		gw.log.Error("OpenAI API error: %v", err)
 		gw.writeOpenAIError(w, http.StatusInternalServerError, "Failed to process request: "+err.Error(), "server_error")
 		return
+	}
+
+	// Track token usage
+	if reply.Metadata != nil {
+		if input, ok := reply.Metadata["input_tokens"].(int); ok {
+			if output, ok := reply.Metadata["output_tokens"].(int); ok {
+				gw.metrics.AddTokens(input, output)
+			}
+		}
 	}
 
 	// Extract usage from reply metadata
