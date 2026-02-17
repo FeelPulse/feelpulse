@@ -221,6 +221,7 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 
 	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
 	telegram.SetHandler(gw.handleMessage)
+	telegram.SetStreamingHandler(gw.handleMessageStreaming)
 	telegram.SetCallbackHandler(gw.handleTelegramCallback)
 	telegram.SetAllowedUsers(gw.cfg.Channels.Telegram.AllowedUsers)
 
@@ -236,6 +237,8 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	gw.mu.Lock()
 	gw.telegram = telegram
 	gw.mu.Unlock()
+
+	log.Printf("📱 Telegram streaming enabled for responsive UX")
 }
 
 // initializeHeartbeat sets up the heartbeat service
@@ -397,6 +400,82 @@ func (gw *Gateway) handleConfigReload(ctx context.Context) {
 			log.Printf("⏱️  Rate limiting disabled")
 		}
 	}
+}
+
+// handleMessageStreaming processes messages with streaming support for Telegram
+func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (*types.Message, error) {
+	// Register user for heartbeat (if enabled)
+	if gw.heartbeat != nil {
+		if uid, ok := gw.getUserIDInt64(msg); ok {
+			gw.heartbeat.RegisterUser(msg.Channel, uid)
+		}
+	}
+
+	// Check for slash commands first (exempt from rate limiting) - no streaming for commands
+	if command.IsCommand(msg.Text) {
+		return gw.commands.Handle(msg)
+	}
+
+	// Check rate limit
+	userID := gw.getUserID(msg)
+	if !gw.limiter.Allow(userID) {
+		log.Printf("⏱️  Rate limited: %s", userID)
+		return &types.Message{
+			Text:    "⏱ Rate limit exceeded. Please wait a moment.",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
+	}
+
+	// Get router with read lock (safe during hot reload)
+	gw.mu.RLock()
+	router := gw.router
+	compactor := gw.compactor
+	gw.mu.RUnlock()
+
+	if router == nil {
+		return &types.Message{
+			Text:    "🔧 AI agent not configured. Set your API key in config.yaml",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
+	}
+
+	// Get session
+	sess := gw.sessions.GetOrCreate(msg.Channel, userID)
+
+	// Add incoming message to session history (and persist)
+	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *msg)
+
+	// Get conversation history for agent
+	history := sess.GetAllMessages()
+
+	// Compact history if needed (summarize old messages)
+	if compactor != nil {
+		compacted, err := compactor.CompactIfNeeded(history)
+		if err != nil {
+			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
+		} else if len(compacted) < len(history) {
+			log.Printf("📦 Compacted history: %d → %d messages", len(history), len(compacted))
+			history = compacted
+		}
+	}
+
+	// Route to agent with streaming callback
+	reply, err := router.ProcessWithHistoryStream(history, agent.StreamCallback(onDelta))
+	if err != nil {
+		log.Printf("❌ Agent error: %v", err)
+		return &types.Message{
+			Text:    "❌ Sorry, I encountered an error processing your message.",
+			Channel: msg.Channel,
+			IsBot:   true,
+		}, nil
+	}
+
+	// Add bot reply to session history (and persist)
+	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *reply)
+
+	return reply, nil
 }
 
 // handleMessage processes incoming messages from channels

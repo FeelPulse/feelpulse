@@ -12,11 +12,17 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
+
+// StreamingHandler is called to process a message with streaming support.
+// It should call onDelta for each text chunk as it arrives.
+// Returns the final response text and error.
+type StreamingHandler func(msg *types.Message, onDelta func(delta string)) (*types.Message, error)
 
 // TelegramBot handles Telegram Bot API interactions
 type TelegramBot struct {
@@ -25,12 +31,13 @@ type TelegramBot struct {
 	client  *http.Client
 	offset  int64
 
-	handler         func(msg *types.Message) (*types.Message, error)
-	callbackHandler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
-	allowedUsers    []string // empty = allow all; non-empty = only these usernames
-	mu              sync.Mutex
-	running         bool
-	cancel          context.CancelFunc
+	handler          func(msg *types.Message) (*types.Message, error)
+	streamingHandler StreamingHandler
+	callbackHandler  func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
+	allowedUsers     []string // empty = allow all; non-empty = only these usernames
+	mu               sync.Mutex
+	running          bool
+	cancel           context.CancelFunc
 }
 
 // TelegramUpdate represents a Telegram update from getUpdates
@@ -95,6 +102,12 @@ func NewTelegramBot(token string) *TelegramBot {
 // SetHandler sets the message handler function
 func (t *TelegramBot) SetHandler(handler func(msg *types.Message) (*types.Message, error)) {
 	t.handler = handler
+}
+
+// SetStreamingHandler sets the streaming message handler function
+// When set, this handler is used instead of the regular handler for streaming responses.
+func (t *TelegramBot) SetStreamingHandler(handler StreamingHandler) {
+	t.streamingHandler = handler
 }
 
 // SetCallbackHandler sets the callback query handler function
@@ -241,7 +254,7 @@ func (t *TelegramBot) poll(ctx context.Context) error {
 
 // handleMessage processes an incoming message
 func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage) {
-	if t.handler == nil {
+	if t.handler == nil && t.streamingHandler == nil {
 		return
 	}
 
@@ -285,48 +298,139 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 		log.Printf("⚠️ Failed to send typing action: %v", err)
 	}
 
-	// Call handler
-	reply, err := t.handler(msg)
+	var reply *types.Message
+	var err error
+
+	// Use streaming handler if available
+	if t.streamingHandler != nil {
+		reply, err = t.handleMessageWithStreaming(ctx, tgMsg.Chat.ID, msg)
+	} else {
+		// Call regular handler
+		reply, err = t.handler(msg)
+	}
+
 	if err != nil {
 		log.Printf("❌ Handler error: %v", err)
 		return
 	}
 
-	if reply != nil && reply.Text != "" {
-		// Check if this is an export response (should send as file)
-		if reply.Metadata != nil {
-			if export, ok := reply.Metadata["export"].(bool); ok && export {
-				filename, _ := reply.Metadata["filename"].(string)
-				if filename == "" {
-					filename = "export.txt"
-				}
-				content := []byte(reply.Text)
-				if err := t.SendDocument(tgMsg.Chat.ID, filename, content, "📤 Conversation export"); err != nil {
-					log.Printf("❌ Failed to send export file: %v", err)
-					_ = t.SendMessage(tgMsg.Chat.ID, "❌ Failed to export conversation.", false)
-				}
-				return
-			}
-		}
+	// For streaming, the message was already sent/updated
+	if t.streamingHandler != nil {
+		return
+	}
 
-		// Check if reply has a keyboard
-		if reply.Keyboard != nil {
-			if keyboard, ok := reply.Keyboard.(InlineKeyboard); ok {
-				if err := t.SendMessageWithKeyboard(tgMsg.Chat.ID, reply.Text, keyboard, true); err != nil {
-					log.Printf("❌ Failed to send reply with keyboard: %v", err)
-				}
-				return
+	if reply != nil && reply.Text != "" {
+		t.sendReply(tgMsg.Chat.ID, reply)
+	}
+}
+
+// handleMessageWithStreaming processes a message using streaming with message editing
+func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int64, msg *types.Message) (*types.Message, error) {
+	// Send initial "thinking..." message
+	thinkingMsgID, err := t.SendMessageAndGetID(chatID, "💭 _Thinking..._", true)
+	if err != nil {
+		log.Printf("⚠️ Failed to send thinking message: %v", err)
+		// Fall back to non-streaming
+		if t.handler != nil {
+			return t.handler(msg)
+		}
+		return nil, err
+	}
+
+	// Track accumulated text and last update time
+	var accumulated strings.Builder
+	var lastUpdate time.Time
+	var mu sync.Mutex
+	updateInterval := 500 * time.Millisecond
+
+	// Create delta handler that updates the message periodically
+	onDelta := func(delta string) {
+		mu.Lock()
+		accumulated.WriteString(delta)
+		currentText := accumulated.String()
+		shouldUpdate := time.Since(lastUpdate) >= updateInterval
+		mu.Unlock()
+
+		if shouldUpdate && currentText != "" {
+			// Truncate for Telegram's 4096 char limit
+			displayText := currentText
+			if len(displayText) > 4000 {
+				displayText = displayText[:4000] + "..."
 			}
+			if err := t.EditMessageText(chatID, thinkingMsgID, displayText, nil); err != nil {
+				log.Printf("⚠️ Failed to update streaming message: %v", err)
+			}
+			mu.Lock()
+			lastUpdate = time.Now()
+			mu.Unlock()
 		}
-		// No keyboard, send regular message
-		if err := t.SendMessage(tgMsg.Chat.ID, reply.Text, true); err != nil {
-			log.Printf("❌ Failed to send reply: %v", err)
+	}
+
+	// Call streaming handler
+	reply, err := t.streamingHandler(msg, onDelta)
+	if err != nil {
+		// Update message with error
+		_ = t.EditMessageText(chatID, thinkingMsgID, "❌ Sorry, I encountered an error processing your message.", nil)
+		return nil, err
+	}
+
+	// Final update with complete response
+	if reply != nil && reply.Text != "" {
+		finalText := reply.Text
+		if len(finalText) > 4000 {
+			finalText = finalText[:4000] + "..."
 		}
+		if err := t.EditMessageText(chatID, thinkingMsgID, finalText, nil); err != nil {
+			log.Printf("⚠️ Failed to send final message update: %v", err)
+			// Try sending as new message
+			_ = t.SendMessage(chatID, reply.Text, true)
+		}
+	}
+
+	return reply, nil
+}
+
+// sendReply sends a reply message handling special cases (export, keyboard)
+func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
+	// Check if this is an export response (should send as file)
+	if reply.Metadata != nil {
+		if export, ok := reply.Metadata["export"].(bool); ok && export {
+			filename, _ := reply.Metadata["filename"].(string)
+			if filename == "" {
+				filename = "export.txt"
+			}
+			content := []byte(reply.Text)
+			if err := t.SendDocument(chatID, filename, content, "📤 Conversation export"); err != nil {
+				log.Printf("❌ Failed to send export file: %v", err)
+				_ = t.SendMessage(chatID, "❌ Failed to export conversation.", false)
+			}
+			return
+		}
+	}
+
+	// Check if reply has a keyboard
+	if reply.Keyboard != nil {
+		if keyboard, ok := reply.Keyboard.(InlineKeyboard); ok {
+			if err := t.SendMessageWithKeyboard(chatID, reply.Text, keyboard, true); err != nil {
+				log.Printf("❌ Failed to send reply with keyboard: %v", err)
+			}
+			return
+		}
+	}
+	// No keyboard, send regular message
+	if err := t.SendMessage(chatID, reply.Text, true); err != nil {
+		log.Printf("❌ Failed to send reply: %v", err)
 	}
 }
 
 // SendMessage sends a message to a chat
 func (t *TelegramBot) SendMessage(chatID int64, text string, markdown bool) error {
+	_, err := t.SendMessageAndGetID(chatID, text, markdown)
+	return err
+}
+
+// SendMessageAndGetID sends a message and returns the message ID
+func (t *TelegramBot) SendMessageAndGetID(chatID int64, text string, markdown bool) (int64, error) {
 	params := map[string]any{
 		"chat_id": chatID,
 		"text":    text,
@@ -336,8 +440,18 @@ func (t *TelegramBot) SendMessage(chatID int64, text string, markdown bool) erro
 		params["parse_mode"] = "Markdown"
 	}
 
-	_, err := t.call("sendMessage", params)
-	return err
+	resp, err := t.call("sendMessage", params)
+	if err != nil {
+		return 0, err
+	}
+
+	// Parse the message to get its ID
+	var sentMsg TelegramMessage
+	if err := json.Unmarshal(resp.Result, &sentMsg); err != nil {
+		return 0, fmt.Errorf("failed to parse sent message: %w", err)
+	}
+
+	return sentMsg.MessageID, nil
 }
 
 // SendTypingAction sends a "typing" indicator to the chat
