@@ -21,6 +21,13 @@ type Persister interface {
 	ListKeys() ([]string, error)
 }
 
+// PersisterWithProfile extends Persister with profile support
+type PersisterWithProfile interface {
+	Persister
+	SaveWithProfile(key string, messages []types.Message, model, profile string) error
+	LoadWithProfile(key string) ([]types.Message, string, string, error)
+}
+
 // Session represents a conversation session with message history
 type Session struct {
 	Key        string
@@ -60,8 +67,19 @@ func (s *Store) SetPersister(p Persister) error {
 		return err
 	}
 
+	// Check if persister supports profile loading
+	pWithProfile, hasProfile := p.(PersisterWithProfile)
+
 	for _, key := range keys {
-		messages, model, err := p.Load(key)
+		var messages []types.Message
+		var model, profile string
+
+		if hasProfile {
+			messages, model, profile, err = pWithProfile.LoadWithProfile(key)
+		} else {
+			messages, model, err = p.Load(key)
+		}
+
 		if err != nil {
 			log.Printf("⚠️  Failed to load session %s: %v", key, err)
 			continue
@@ -71,6 +89,7 @@ func (s *Store) SetPersister(p Persister) error {
 			Key:        key,
 			Messages:   messages,
 			Model:      model,
+			Profile:    profile,
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 			MaxHistory: DefaultMaxHistory,
@@ -180,8 +199,17 @@ func (s *Store) AddMessageAndPersist(channel, userID string, msg types.Message) 
 	if persister != nil {
 		messages := sess.GetAllMessages()
 		model := sess.GetModel()
-		if err := persister.Save(sess.Key, messages, model); err != nil {
-			log.Printf("⚠️  Failed to persist session: %v", err)
+		profile := sess.GetProfile()
+
+		// Use SaveWithProfile if available
+		if pWithProfile, ok := persister.(PersisterWithProfile); ok {
+			if err := pWithProfile.SaveWithProfile(sess.Key, messages, model, profile); err != nil {
+				log.Printf("⚠️  Failed to persist session: %v", err)
+			}
+		} else {
+			if err := persister.Save(sess.Key, messages, model); err != nil {
+				log.Printf("⚠️  Failed to persist session: %v", err)
+			}
 		}
 	}
 }
@@ -200,8 +228,17 @@ func (s *Store) Persist(channel, userID string) {
 
 	messages := sess.GetAllMessages()
 	model := sess.GetModel()
-	if err := persister.Save(key, messages, model); err != nil {
-		log.Printf("⚠️  Failed to persist session: %v", err)
+	profile := sess.GetProfile()
+
+	// Use SaveWithProfile if available
+	if pWithProfile, ok := persister.(PersisterWithProfile); ok {
+		if err := pWithProfile.SaveWithProfile(key, messages, model, profile); err != nil {
+			log.Printf("⚠️  Failed to persist session: %v", err)
+		}
+	} else {
+		if err := persister.Save(key, messages, model); err != nil {
+			log.Printf("⚠️  Failed to persist session: %v", err)
+		}
 	}
 }
 

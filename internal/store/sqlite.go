@@ -44,6 +44,9 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to create table: %w", err)
 	}
 
+	// Add profile column if not exists (migration)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN profile TEXT NOT NULL DEFAULT ''`)
+
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -57,6 +60,11 @@ func (s *SQLiteStore) Close() error {
 
 // Save persists a session to the database (upsert)
 func (s *SQLiteStore) Save(key string, messages []types.Message, model string) error {
+	return s.SaveWithProfile(key, messages, model, "")
+}
+
+// SaveWithProfile persists a session with model and profile to the database (upsert)
+func (s *SQLiteStore) SaveWithProfile(key string, messages []types.Message, model, profile string) error {
 	// Serialize messages to JSON
 	data, err := json.Marshal(messages)
 	if err != nil {
@@ -67,9 +75,9 @@ func (s *SQLiteStore) Save(key string, messages []types.Message, model string) e
 
 	// Upsert using INSERT OR REPLACE
 	_, err = s.db.Exec(`
-		INSERT OR REPLACE INTO sessions (key, messages, model, updated_at)
-		VALUES (?, ?, ?, ?)
-	`, key, string(data), model, now)
+		INSERT OR REPLACE INTO sessions (key, messages, model, profile, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, key, string(data), model, profile, now)
 
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
@@ -81,26 +89,39 @@ func (s *SQLiteStore) Save(key string, messages []types.Message, model string) e
 // Load retrieves a session from the database
 // Returns nil messages if session doesn't exist
 func (s *SQLiteStore) Load(key string) ([]types.Message, string, error) {
+	messages, model, _, err := s.LoadWithProfile(key)
+	return messages, model, err
+}
+
+// LoadWithProfile retrieves a session with model and profile from the database
+// Returns nil messages if session doesn't exist
+func (s *SQLiteStore) LoadWithProfile(key string) ([]types.Message, string, string, error) {
 	var messagesJSON string
 	var model string
+	var profile sql.NullString
 
 	err := s.db.QueryRow(`
-		SELECT messages, model FROM sessions WHERE key = ?
-	`, key).Scan(&messagesJSON, &model)
+		SELECT messages, model, profile FROM sessions WHERE key = ?
+	`, key).Scan(&messagesJSON, &model, &profile)
 
 	if err == sql.ErrNoRows {
-		return nil, "", nil
+		return nil, "", "", nil
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to load session: %w", err)
+		return nil, "", "", fmt.Errorf("failed to load session: %w", err)
 	}
 
 	var messages []types.Message
 	if err := json.Unmarshal([]byte(messagesJSON), &messages); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal messages: %w", err)
+		return nil, "", "", fmt.Errorf("failed to unmarshal messages: %w", err)
 	}
 
-	return messages, model, nil
+	profileStr := ""
+	if profile.Valid {
+		profileStr = profile.String
+	}
+
+	return messages, model, profileStr, nil
 }
 
 // Delete removes a session from the database
