@@ -246,6 +246,7 @@ Extensible tool system for function calling.
 ```plantuml
 @startuml tools
 !theme plain
+allowmixing
 skinparam backgroundColor #FAFAFA
 
 class Registry {
