@@ -624,7 +624,7 @@ func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta
 		if err != nil {
 			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
 		} else if len(compacted) < len(history) {
-			log.Printf("📦 Compacted history: %d → %d messages", len(history), len(compacted))
+			log.Printf("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
 			history = compacted
 			// Track compaction
 			if gw.usage != nil {
@@ -744,7 +744,7 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 		if err != nil {
 			log.Printf("⚠️  Compaction failed: %v (using full history)", err)
 		} else if len(compacted) < len(history) {
-			log.Printf("📦 Compacted history: %d → %d messages", len(history), len(compacted))
+			log.Printf("📦 Compacted %d messages → summary (%d messages kept)", len(history)-len(compacted)+1, len(compacted))
 			history = compacted
 			// Track compaction
 			if gw.usage != nil {
