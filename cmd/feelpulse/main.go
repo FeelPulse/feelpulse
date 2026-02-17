@@ -10,6 +10,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/gateway"
 	"github.com/FeelPulse/feelpulse/internal/memory"
+	"github.com/FeelPulse/feelpulse/internal/skills"
 	"github.com/FeelPulse/feelpulse/internal/tui"
 )
 
@@ -32,6 +33,8 @@ func main() {
 		cmdAuth()
 	case "workspace":
 		cmdWorkspace()
+	case "skills":
+		cmdSkills()
 	case "service":
 		cmdService()
 	case "tui":
@@ -60,10 +63,76 @@ Commands:
   auth           Configure authentication (API key or setup-token)
   workspace      Manage workspace files (SOUL.md, USER.md, MEMORY.md)
     init         Create workspace directory with template files
+  skills         Manage skills (AI tools)
+    list         List loaded skills
   service        Manage systemd service (install/uninstall/enable/disable/status)
   tui            Start interactive terminal chat interface
   version        Print version
   help           Show this help`)
+}
+
+func cmdSkills() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: feelpulse skills <command>")
+		fmt.Println("\nCommands:")
+		fmt.Println("  list    List all loaded skills")
+		os.Exit(1)
+	}
+
+	switch os.Args[2] {
+	case "list":
+		cmdSkillsList()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown skills command: %s\n", os.Args[2])
+		os.Exit(1)
+	}
+}
+
+func cmdSkillsList() {
+	skillsPath := skills.DefaultSkillsPath()
+	
+	// Check if config overrides workspace path
+	if cfg, err := config.Load(); err == nil && cfg.Workspace.Path != "" {
+		skillsPath = cfg.Workspace.Path + "/skills"
+	}
+
+	mgr := skills.NewManager(skillsPath)
+	loaded := mgr.ListSkills()
+
+	if len(loaded) == 0 {
+		fmt.Println("📭 No skills loaded.")
+		fmt.Printf("\nSkills directory: %s\n", skillsPath)
+		fmt.Println("\nTo create a skill:")
+		fmt.Println("  1. Create a directory: mkdir -p " + skillsPath + "/my-skill")
+		fmt.Println("  2. Add SKILL.md with description and parameters")
+		fmt.Println("  3. Optionally add run.sh for execution")
+		return
+	}
+
+	fmt.Printf("🛠️ *Loaded Skills* (%d)\n\n", len(loaded))
+	for _, skill := range loaded {
+		hasExec := ""
+		if skill.Executable != "" {
+			hasExec = " ⚡"
+		}
+		fmt.Printf("  • %s%s\n", skill.Name, hasExec)
+		if skill.Description != "" {
+			fmt.Printf("    %s\n", skill.Description)
+		}
+		if len(skill.Parameters) > 0 {
+			fmt.Printf("    Parameters: ")
+			paramNames := make([]string, len(skill.Parameters))
+			for i, p := range skill.Parameters {
+				req := ""
+				if p.Required {
+					req = "*"
+				}
+				paramNames[i] = p.Name + req
+			}
+			fmt.Printf("%s\n", strings.Join(paramNames, ", "))
+		}
+		fmt.Println()
+	}
 }
 
 func cmdInit() {

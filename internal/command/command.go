@@ -10,6 +10,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/scheduler"
 	"github.com/FeelPulse/feelpulse/internal/session"
+	"github.com/FeelPulse/feelpulse/internal/skills"
 	"github.com/FeelPulse/feelpulse/internal/usage"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -19,6 +20,7 @@ type Handler struct {
 	sessions  *session.Store
 	scheduler *scheduler.Scheduler
 	usage     *usage.Tracker
+	skills    *skills.Manager
 	cfg       *config.Config
 }
 
@@ -38,6 +40,11 @@ func (h *Handler) SetScheduler(s *scheduler.Scheduler) {
 // SetUsageTracker sets the usage tracker
 func (h *Handler) SetUsageTracker(t *usage.Tracker) {
 	h.usage = t
+}
+
+// SetSkillsManager sets the skills manager
+func (h *Handler) SetSkillsManager(m *skills.Manager) {
+	h.skills = m
 }
 
 // IsCommand checks if a message is a slash command
@@ -102,6 +109,8 @@ func (h *Handler) Handle(msg *types.Message) (*types.Message, error) {
 		response, keyboard = h.handleModel(msg.Channel, userID, args)
 	case "models":
 		response, keyboard = h.handleModels()
+	case "skills":
+		response = h.handleSkills()
 	case "help", "start":
 		response = h.handleHelp()
 	default:
@@ -267,6 +276,34 @@ func (h *Handler) handleModels() (string, any) {
 	return sb.String(), keyboard
 }
 
+// handleSkills lists loaded skills
+func (h *Handler) handleSkills() string {
+	if h.skills == nil {
+		return "❌ Skills system not enabled."
+	}
+
+	loaded := h.skills.ListSkills()
+	if len(loaded) == 0 {
+		return "📭 No skills loaded.\n\nSkills can be added to the workspace/skills directory."
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🛠️ *Loaded Skills* (%d)\n\n", len(loaded)))
+
+	for _, skill := range loaded {
+		hasExec := ""
+		if skill.Executable != "" {
+			hasExec = " ⚡"
+		}
+		sb.WriteString(fmt.Sprintf("• *%s*%s\n", skill.Name, hasExec))
+		if skill.Description != "" {
+			sb.WriteString(fmt.Sprintf("  %s\n", skill.Description))
+		}
+	}
+
+	return sb.String()
+}
+
 // handleHelp shows available commands
 func (h *Handler) handleHelp() string {
 	return `🫀 *FeelPulse — AI Chat Assistant*
@@ -278,6 +315,9 @@ func (h *Handler) handleHelp() string {
 🤖 *AI Model*
   /model — Show or switch AI model
   /models — List available models
+
+🛠️ *Skills*
+  /skills — List loaded AI tools
 
 ⏰ *Reminders*
   /remind in <time> <msg> — Set reminder

@@ -32,6 +32,7 @@ func BotCommands() []BotCommand {
 		{Command: "new", Description: "Start a new conversation"},
 		{Command: "history", Description: "Show recent messages"},
 		{Command: "model", Description: "Show or switch AI model"},
+		{Command: "skills", Description: "List loaded AI tools"},
 		{Command: "usage", Description: "Show token usage stats"},
 		{Command: "reminders", Description: "List active reminders"},
 		{Command: "help", Description: "Show all commands"},
