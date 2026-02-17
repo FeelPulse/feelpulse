@@ -17,10 +17,14 @@ type Agent interface {
 	Name() string
 }
 
+// SystemPromptBuilder builds the system prompt dynamically
+type SystemPromptBuilder func(defaultPrompt string) string
+
 // Router manages AI agent providers
 type Router struct {
-	cfg     *config.Config
-	agent   Agent
+	cfg           *config.Config
+	agent         Agent
+	promptBuilder SystemPromptBuilder
 }
 
 // NewRouter creates a new agent router
@@ -69,8 +73,11 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 	var resp *types.AgentResponse
 	var err error
 
-	// Get system prompt from config
+	// Get system prompt from config, optionally enhanced by prompt builder
 	systemPrompt := r.cfg.Agent.System
+	if r.promptBuilder != nil {
+		systemPrompt = r.promptBuilder(systemPrompt)
+	}
 
 	// Use streaming if callback is provided
 	if callback != nil {
@@ -104,6 +111,11 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 // SystemPrompt returns the configured system prompt
 func (r *Router) SystemPrompt() string {
 	return r.cfg.Agent.System
+}
+
+// SetSystemPromptBuilder sets a function to build the system prompt dynamically
+func (r *Router) SetSystemPromptBuilder(builder SystemPromptBuilder) {
+	r.promptBuilder = builder
 }
 
 // Agent returns the current agent

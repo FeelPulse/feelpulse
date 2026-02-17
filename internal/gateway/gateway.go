@@ -15,6 +15,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/channel"
 	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/memory"
 	"github.com/FeelPulse/feelpulse/internal/session"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -27,15 +28,30 @@ type Gateway struct {
 	router   *agent.Router
 	sessions *session.Store
 	commands *command.Handler
+	memory   *memory.Manager
 }
 
 func New(cfg *config.Config) *Gateway {
 	sessions := session.NewStore()
+
+	// Initialize memory/workspace manager
+	workspacePath := cfg.Workspace.Path
+	if workspacePath == "" {
+		workspacePath = memory.DefaultWorkspacePath()
+	}
+	memMgr := memory.NewManager(workspacePath)
+	if err := memMgr.Load(); err != nil {
+		log.Printf("⚠️  Failed to load workspace files: %v", err)
+	} else if memMgr.Soul() != "" || memMgr.User() != "" || memMgr.Memory() != "" {
+		log.Printf("📂 Workspace loaded from %s", workspacePath)
+	}
+
 	gw := &Gateway{
 		cfg:      cfg,
 		mux:      http.NewServeMux(),
 		sessions: sessions,
 		commands: command.NewHandler(sessions, cfg),
+		memory:   memMgr,
 	}
 	gw.setupRoutes()
 	return gw
@@ -56,6 +72,8 @@ func (gw *Gateway) Start() error {
 		if err != nil {
 			log.Printf("⚠️  Agent not configured: %v", err)
 		} else {
+			// Inject workspace files into system prompt
+			router.SetSystemPromptBuilder(gw.memory.BuildSystemPrompt)
 			gw.router = router
 			log.Printf("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
 		}

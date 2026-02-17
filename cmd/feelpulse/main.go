@@ -9,6 +9,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/agent"
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/gateway"
+	"github.com/FeelPulse/feelpulse/internal/memory"
 )
 
 const version = "0.1.0"
@@ -28,6 +29,8 @@ func main() {
 		cmdInit()
 	case "auth":
 		cmdAuth()
+	case "workspace":
+		cmdWorkspace()
 	case "version":
 		fmt.Printf("feelpulse v%s\n", version)
 	case "help", "-h", "--help":
@@ -46,12 +49,14 @@ Usage:
   feelpulse <command>
 
 Commands:
-  init      Initialize configuration
-  start     Start the gateway server
-  status    Check gateway status
-  auth      Configure authentication (API key or setup-token)
-  version   Print version
-  help      Show this help`)
+  init           Initialize configuration
+  start          Start the gateway server
+  status         Check gateway status
+  auth           Configure authentication (API key or setup-token)
+  workspace      Manage workspace files (SOUL.md, USER.md, MEMORY.md)
+    init         Create workspace directory with template files
+  version        Print version
+  help           Show this help`)
 }
 
 func cmdInit() {
@@ -196,6 +201,56 @@ func cmdStatus() {
 	} else {
 		fmt.Println("   📱 Telegram: Disabled")
 	}
+
+	// Show workspace status
+	workspacePath := cfg.Workspace.Path
+	if workspacePath == "" {
+		workspacePath = memory.DefaultWorkspacePath()
+	}
+	if _, err := os.Stat(workspacePath); err == nil {
+		fmt.Printf("   📂 Workspace: %s\n", workspacePath)
+	} else {
+		fmt.Printf("   📂 Workspace: Not initialized (run 'feelpulse workspace init')\n")
+	}
 	
 	fmt.Println("\n✅ Config loaded")
+}
+
+func cmdWorkspace() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: feelpulse workspace <command>")
+		fmt.Println("\nCommands:")
+		fmt.Println("  init    Create workspace directory with template files")
+		os.Exit(1)
+	}
+
+	switch os.Args[2] {
+	case "init":
+		cmdWorkspaceInit()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown workspace command: %s\n", os.Args[2])
+		os.Exit(1)
+	}
+}
+
+func cmdWorkspaceInit() {
+	// Load config to get workspace path, or use default
+	var workspacePath string
+	if cfg, err := config.Load(); err == nil && cfg.Workspace.Path != "" {
+		workspacePath = cfg.Workspace.Path
+	} else {
+		workspacePath = memory.DefaultWorkspacePath()
+	}
+
+	if err := memory.InitWorkspace(workspacePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing workspace: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Workspace initialized: %s\n", workspacePath)
+	fmt.Println("\nCreated template files:")
+	fmt.Println("  📄 SOUL.md   — Your AI persona (replaces system prompt)")
+	fmt.Println("  📄 USER.md   — User context information")
+	fmt.Println("  📄 MEMORY.md — Long-term memory across conversations")
+	fmt.Println("\nEdit these files to customize your assistant!")
 }

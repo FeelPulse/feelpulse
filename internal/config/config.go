@@ -9,10 +9,15 @@ import (
 )
 
 type Config struct {
-	Gateway  GatewayConfig  `yaml:"gateway"`
-	Agent    AgentConfig    `yaml:"agent"`
-	Channels ChannelsConfig `yaml:"channels"`
-	Hooks    HooksConfig    `yaml:"hooks"`
+	Gateway   GatewayConfig   `yaml:"gateway"`
+	Agent     AgentConfig     `yaml:"agent"`
+	Channels  ChannelsConfig  `yaml:"channels"`
+	Hooks     HooksConfig     `yaml:"hooks"`
+	Workspace WorkspaceConfig `yaml:"workspace"`
+}
+
+type WorkspaceConfig struct {
+	Path string `yaml:"path"`
 }
 
 type GatewayConfig struct {
@@ -53,6 +58,7 @@ type HooksConfig struct {
 }
 
 func Default() *Config {
+	home, _ := os.UserHomeDir()
 	return &Config{
 		Gateway: GatewayConfig{
 			Port: 18789,
@@ -71,6 +77,9 @@ func Default() *Config {
 		Hooks: HooksConfig{
 			Enabled: true,
 			Path:    "/hooks",
+		},
+		Workspace: WorkspaceConfig{
+			Path: filepath.Join(home, ".feelpulse", "workspace"),
 		},
 	}
 }
