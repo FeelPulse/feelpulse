@@ -7,9 +7,13 @@ import (
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
+// StreamCallback is called for each text delta during streaming
+type StreamCallback func(delta string)
+
 // Agent interface defines the contract for AI providers
 type Agent interface {
 	Chat(messages []types.Message) (*types.AgentResponse, error)
+	ChatStream(messages []types.Message, systemPrompt string, callback StreamCallback) (*types.AgentResponse, error)
 	Name() string
 }
 
@@ -44,6 +48,11 @@ func (r *Router) Process(msg *types.Message) (*types.Message, error) {
 
 // ProcessWithHistory handles a message with full conversation history
 func (r *Router) ProcessWithHistory(messages []types.Message) (*types.Message, error) {
+	return r.ProcessWithHistoryStream(messages, nil)
+}
+
+// ProcessWithHistoryStream handles messages with optional streaming callback
+func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback StreamCallback) (*types.Message, error) {
 	if r.agent == nil {
 		return nil, fmt.Errorf("no agent configured")
 	}
@@ -52,8 +61,19 @@ func (r *Router) ProcessWithHistory(messages []types.Message) (*types.Message, e
 		return nil, fmt.Errorf("no messages provided")
 	}
 
-	// Call the agent with full history
-	resp, err := r.agent.Chat(messages)
+	var resp *types.AgentResponse
+	var err error
+
+	// Get system prompt from config
+	systemPrompt := r.cfg.Agent.System
+
+	// Use streaming if callback is provided
+	if callback != nil {
+		resp, err = r.agent.ChatStream(messages, systemPrompt, callback)
+	} else {
+		resp, err = r.agent.Chat(messages)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("agent error: %w", err)
 	}
@@ -74,6 +94,11 @@ func (r *Router) ProcessWithHistory(messages []types.Message) (*types.Message, e
 	}
 
 	return reply, nil
+}
+
+// SystemPrompt returns the configured system prompt
+func (r *Router) SystemPrompt() string {
+	return r.cfg.Agent.System
 }
 
 // Agent returns the current agent

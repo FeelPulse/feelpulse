@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -43,6 +44,29 @@ type AnthropicRequest struct {
 	MaxTokens int                `json:"max_tokens"`
 	Messages  []AnthropicMessage `json:"messages"`
 	System    string             `json:"system,omitempty"`
+	Stream    bool               `json:"stream,omitempty"`
+}
+
+// SSEEvent represents a Server-Sent Event from the streaming API
+type SSEEvent struct {
+	Type    string         `json:"type"`
+	Index   int            `json:"index,omitempty"`
+	Delta   SSEDelta       `json:"delta,omitempty"`
+	Message *SSEMessage    `json:"message,omitempty"`
+	Usage   *AnthropicUsage `json:"usage,omitempty"`
+}
+
+// SSEDelta represents a text delta in streaming
+type SSEDelta struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+// SSEMessage represents message info in streaming
+type SSEMessage struct {
+	ID    string         `json:"id,omitempty"`
+	Model string         `json:"model,omitempty"`
+	Usage *AnthropicUsage `json:"usage,omitempty"`
 }
 
 // AnthropicMessage represents a message in the Claude format
@@ -134,8 +158,16 @@ func (c *AnthropicClient) AuthModeName() string {
 	return "api-key"
 }
 
-// Chat sends messages to Claude and returns a response
+// DefaultSystemPrompt is the default system prompt for FeelPulse
+const DefaultSystemPrompt = "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful."
+
+// Chat sends messages to Claude and returns a response (uses default system prompt)
 func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, error) {
+	return c.ChatWithSystem(messages, "")
+}
+
+// ChatWithSystem sends messages to Claude with a custom system prompt
+func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt string) (*types.AgentResponse, error) {
 	// Convert our messages to Anthropic format
 	anthropicMsgs := make([]AnthropicMessage, 0, len(messages))
 
@@ -151,12 +183,17 @@ func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, 
 		})
 	}
 
+	// Use default system prompt if not provided
+	if systemPrompt == "" {
+		systemPrompt = DefaultSystemPrompt
+	}
+
 	// Build request
 	reqBody := AnthropicRequest{
 		Model:     c.model,
 		MaxTokens: defaultMaxTokens,
 		Messages:  anthropicMsgs,
-		System:    "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful.",
+		System:    systemPrompt,
 	}
 
 	bodyData, err := json.Marshal(reqBody)
@@ -231,4 +268,151 @@ func (c *AnthropicClient) Chat(messages []types.Message) (*types.AgentResponse, 
 			OutputTokens: anthropicResp.Usage.OutputTokens,
 		},
 	}, nil
+}
+
+// ChatStream sends messages to Claude with streaming and calls callback for each delta
+func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt string, callback StreamCallback) (*types.AgentResponse, error) {
+	// Convert our messages to Anthropic format
+	anthropicMsgs := make([]AnthropicMessage, 0, len(messages))
+
+	for _, msg := range messages {
+		role := "user"
+		if msg.IsBot {
+			role = "assistant"
+		}
+
+		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
+			Role:    role,
+			Content: msg.Text,
+		})
+	}
+
+	// Use default system prompt if not provided
+	if systemPrompt == "" {
+		systemPrompt = "You are a helpful AI assistant called FeelPulse. Be concise, friendly, and helpful."
+	}
+
+	// Build request with streaming enabled
+	reqBody := AnthropicRequest{
+		Model:     c.model,
+		MaxTokens: defaultMaxTokens,
+		Messages:  anthropicMsgs,
+		System:    systemPrompt,
+		Stream:    true,
+	}
+
+	bodyData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", anthropicAPIVersion)
+
+	if c.authMode == AuthModeOAuth {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+		req.Header.Set("user-agent", fmt.Sprintf("claude-cli/%s (external, cli)", claudeCodeVersion))
+		req.Header.Set("x-app", "cli")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+	} else {
+		req.Header.Set("x-api-key", c.apiKey)
+	}
+
+	// Send request
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for errors
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		var errResp anthropicErrorWrapper
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("anthropic API error: %s (%s)", errResp.Error.Message, errResp.Error.Type)
+		}
+		return nil, fmt.Errorf("anthropic API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse SSE stream
+	var fullText strings.Builder
+	var model string
+	var usage types.Usage
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		// Parse SSE data lines
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+
+			// Skip [DONE] marker
+			if data == "[DONE]" {
+				continue
+			}
+
+			event, err := parseSSEEvent(data)
+			if err != nil {
+				log.Printf("⚠️ Failed to parse SSE event: %v", err)
+				continue
+			}
+
+			switch event.Type {
+			case "message_start":
+				if event.Message != nil {
+					model = event.Message.Model
+					if event.Message.Usage != nil {
+						usage.InputTokens = event.Message.Usage.InputTokens
+					}
+				}
+			case "content_block_delta":
+				if event.Delta.Text != "" {
+					fullText.WriteString(event.Delta.Text)
+					if callback != nil {
+						callback(event.Delta.Text)
+					}
+				}
+			case "message_delta":
+				if event.Usage != nil {
+					usage.OutputTokens = event.Usage.OutputTokens
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading stream: %w", err)
+	}
+
+	text := fullText.String()
+	log.Printf("📥 [anthropic/stream] response: %s", text)
+
+	return &types.AgentResponse{
+		Text:  text,
+		Model: model,
+		Usage: usage,
+	}, nil
+}
+
+// parseSSEEvent parses a JSON SSE event
+func parseSSEEvent(data string) (*SSEEvent, error) {
+	var event SSEEvent
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		return nil, fmt.Errorf("failed to parse SSE event: %w", err)
+	}
+	return &event, nil
 }
