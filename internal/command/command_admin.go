@@ -29,6 +29,12 @@ func (h *Handler) handleAdmin(ch, userID, username, args string) string {
 		return h.handleAdminSessions()
 	case "reload":
 		return h.handleAdminReload()
+	case "reborn":
+		// Handle confirmation
+		if len(parts) > 1 && strings.ToLower(parts[1]) == "confirm" {
+			return h.handleAdminReborn()
+		}
+		return h.handleAdminRebornConfirm()
 	case "":
 		return h.handleAdminHelp()
 	default:
@@ -86,11 +92,48 @@ func (h *Handler) handleAdminReload() string {
 	return "✅ Configuration and workspace files reloaded."
 }
 
+// handleAdminRebornConfirm asks for confirmation before reborn
+func (h *Handler) handleAdminRebornConfirm() string {
+	return `⚠️ *Reborn Confirmation Required*
+
+This will:
+- Remove your current IDENTITY.md
+- Create a new BOOTSTRAP.md
+- Reset you to "first-time" state
+- You will re-introduce yourself and ask for names
+
+**This cannot be undone.**
+
+To confirm, send: ` + "`/admin reborn confirm`"
+}
+
+// handleAdminReborn performs the reborn operation
+func (h *Handler) handleAdminReborn() string {
+	if h.memory == nil {
+		return "❌ Memory manager not available."
+	}
+
+	path, err := h.memory.Reborn()
+	if err != nil {
+		return fmt.Sprintf("❌ Reborn failed: %v", err)
+	}
+
+	// Trigger skill reload callback if set (to refresh system prompt)
+	if skillReloadCallback != nil {
+		if err := skillReloadCallback(); err != nil {
+			return fmt.Sprintf("⚠️ BOOTSTRAP.md created but reload failed: %v", err)
+		}
+	}
+
+	return fmt.Sprintf("✅ Reborn complete!\n\nBOOTSTRAP.md created at: %s\n\nYour next message will trigger the bootstrap process.", path)
+}
+
 // handleAdminHelp shows admin commands
 func (h *Handler) handleAdminHelp() string {
 	return `🔐 *Admin Commands*
 
   /admin stats — System statistics
   /admin sessions — All active sessions  
-  /admin reload — Reload config + workspace`
+  /admin reload — Reload config + workspace
+  /admin reborn — Reset to first-time state (requires confirmation)`
 }

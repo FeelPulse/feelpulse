@@ -9,18 +9,22 @@ import (
 )
 
 const (
-	soulFile   = "SOUL.md"
-	userFile   = "USER.md"
-	memoryFile = "MEMORY.md"
+	bootstrapFile = "BOOTSTRAP.md"
+	identityFile  = "IDENTITY.md"
+	soulFile      = "SOUL.md"
+	userFile      = "USER.md"
+	memoryFile    = "MEMORY.md"
 )
 
 // Manager handles workspace file loading and system prompt building
 type Manager struct {
-	path   string
-	soul   string
-	user   string
-	memory string
-	skills []skillEntry // loaded skill docs
+	path      string
+	bootstrap string
+	identity  string
+	soul      string
+	user      string
+	memory    string
+	skills    []skillEntry // loaded skill docs
 }
 
 // skillEntry holds a loaded skill's name and description
@@ -36,19 +40,39 @@ func NewManager(workspacePath string) *Manager {
 
 // Load reads workspace files from disk. Missing files are silently ignored.
 func (m *Manager) Load() error {
+	// Read BOOTSTRAP.md (first-run instructions, highest priority)
+	if data, err := os.ReadFile(filepath.Join(m.path, bootstrapFile)); err == nil {
+		m.bootstrap = string(data)
+	} else {
+		m.bootstrap = ""
+	}
+
+	// Read IDENTITY.md (bot and user identity)
+	if data, err := os.ReadFile(filepath.Join(m.path, identityFile)); err == nil {
+		m.identity = string(data)
+	} else {
+		m.identity = ""
+	}
+
 	// Read SOUL.md (persona/system prompt override)
 	if data, err := os.ReadFile(filepath.Join(m.path, soulFile)); err == nil {
 		m.soul = string(data)
+	} else {
+		m.soul = ""
 	}
 
 	// Read USER.md (user context)
 	if data, err := os.ReadFile(filepath.Join(m.path, userFile)); err == nil {
 		m.user = string(data)
+	} else {
+		m.user = ""
 	}
 
 	// Read MEMORY.md (long-term memory)
 	if data, err := os.ReadFile(filepath.Join(m.path, memoryFile)); err == nil {
 		m.memory = string(data)
+	} else {
+		m.memory = ""
 	}
 
 	// Load skills from skills/ directory
@@ -89,16 +113,25 @@ func (m *Manager) Memory() string {
 }
 
 // BuildSystemPrompt constructs the full system prompt by combining workspace files.
-// If SOUL.md exists, it replaces/prepends the default prompt.
-// USER.md and MEMORY.md are appended as context sections.
+// Priority: BOOTSTRAP.md > SOUL.md > defaultPrompt
+// Then appends: IDENTITY, USER, MEMORY, Workspace, Skills
 func (m *Manager) BuildSystemPrompt(defaultPrompt string) string {
 	var parts []string
 
-	// SOUL.md replaces/prepends the base system prompt
-	if m.soul != "" {
+	// BOOTSTRAP.md has highest priority (first-run instructions)
+	if m.bootstrap != "" {
+		parts = append(parts, m.bootstrap)
+	} else if m.soul != "" {
+		// SOUL.md overrides default prompt
 		parts = append(parts, m.soul)
 	} else if defaultPrompt != "" {
+		// Use default prompt as fallback
 		parts = append(parts, defaultPrompt)
+	}
+
+	// Append IDENTITY.md (bot and user identity)
+	if m.identity != "" {
+		parts = append(parts, "\n\n## Identity\n"+m.identity)
 	}
 
 	// Append USER.md as user context section
@@ -144,6 +177,49 @@ func DefaultWorkspacePath() string {
 	return filepath.Join(home, ".feelpulse", "workspace")
 }
 
+// Reborn resets the workspace to initial state by recreating BOOTSTRAP.md
+// and removing IDENTITY.md. Returns the path to the created BOOTSTRAP.md.
+func (m *Manager) Reborn() (string, error) {
+	bootstrapPath := filepath.Join(m.path, bootstrapFile)
+	identityPath := filepath.Join(m.path, identityFile)
+
+	// Remove IDENTITY.md if it exists
+	_ = os.Remove(identityPath)
+
+	// Recreate BOOTSTRAP.md
+	bootstrapContent := `# Bootstrap - First Steps
+
+This is a fresh start. Before doing anything else:
+
+1. Greet the user warmly and introduce yourself as an AI assistant
+2. Ask the user what their name is
+3. Ask the user what they would like to call you (your name/identity)
+4. Write your identity information to IDENTITY.md in this format:
+
+` + "```" + `
+# Identity
+
+- My name: <name you chose>
+- User's name: <their name>
+- Created: <current date in YYYY-MM-DD format>
+` + "```" + `
+
+5. Delete this BOOTSTRAP.md file using file_write with empty content or exec rm
+6. Thank the user warmly and ask how you can help them today
+
+Important: Complete all steps above in your first interaction. Be warm and personable!
+`
+
+	if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0644); err != nil {
+		return "", err
+	}
+
+	// Reload to pick up the new BOOTSTRAP.md
+	m.Load()
+
+	return bootstrapPath, nil
+}
+
 // InitWorkspace creates the workspace directory and template files.
 // Does NOT overwrite existing files.
 func InitWorkspace(workspacePath string) error {
@@ -154,6 +230,28 @@ func InitWorkspace(workspacePath string) error {
 
 	// Template content for each file
 	templates := map[string]string{
+		bootstrapFile: `# Bootstrap - First Steps
+
+This is your first time running. Before doing anything else:
+
+1. Greet the user warmly and introduce yourself as an AI assistant
+2. Ask the user what their name is
+3. Ask the user what they would like to call you (your name/identity)
+4. Write your identity information to IDENTITY.md in this format:
+
+` + "```" + `
+# Identity
+
+- My name: <name you chose>
+- User's name: <their name>  
+- Created: <current date in YYYY-MM-DD format>
+` + "```" + `
+
+5. Delete this BOOTSTRAP.md file using file_write with empty content or exec rm
+6. Thank the user warmly and ask how you can help them today
+
+Important: Complete all steps above in your first interaction. Be warm and personable!
+`,
 		soulFile: `# Soul - Your AI Persona
 
 This file defines who you are. Write in first person.
