@@ -39,6 +39,8 @@ func main() {
 		cmdService()
 	case "tui":
 		cmdTUI()
+	case "reset":
+		cmdReset()
 	case "version", "-v", "--version":
 		cmdVersion()
 	case "help", "-h", "--help":
@@ -67,6 +69,7 @@ Commands:
     list         List loaded skills
   service        Manage systemd service (install/uninstall/enable/disable/status)
   tui            Start interactive terminal chat interface
+  reset          Clear all memory and sessions (requires confirmation)
   version        Print version
   help           Show this help`)
 }
@@ -386,4 +389,70 @@ func cmdTUI() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func cmdReset() {
+	// Load config to get workspace path
+	var workspacePath string
+	if cfg, err := config.Load(); err == nil && cfg.Workspace.Path != "" {
+		workspacePath = cfg.Workspace.Path
+	} else {
+		workspacePath = memory.DefaultWorkspacePath()
+	}
+
+	// Show what will be deleted
+	fmt.Println("⚠️  *Reset Confirmation Required*")
+	fmt.Println()
+	fmt.Println("This will:")
+	fmt.Println("  - Clear ALL session history (conversations, reminders, sub-agents, pins)")
+	fmt.Println("  - Remove IDENTITY.md, MEMORY.md, and memory/ directory")
+	fmt.Println("  - Delete database: ~/.feelpulse/sessions.db")
+	fmt.Println()
+	fmt.Println("User config files are preserved:")
+	fmt.Println("  - AGENTS.md, SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md")
+	fmt.Println()
+	fmt.Println("⚠️  *This cannot be undone.*")
+	fmt.Println()
+	fmt.Print("Type 'yes' to confirm: ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(strings.ToLower(input))
+
+	if input != "yes" {
+		fmt.Println("❌ Reset cancelled.")
+		os.Exit(0)
+	}
+
+	// Delete database file
+	home, _ := os.UserHomeDir()
+	dbPath := fmt.Sprintf("%s/.feelpulse/sessions.db", home)
+	
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := os.Remove(dbPath); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to delete database: %v\n", err)
+		} else {
+			fmt.Println("✅ Database cleared")
+		}
+	}
+
+	// Reset memory files
+	mgr := memory.NewManager(workspacePath)
+	if err := mgr.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: %v\n", err)
+	}
+
+	bootstrapPath, err := mgr.Reset()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Memory reset failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✅ Memory cleared")
+	fmt.Printf("✅ BOOTSTRAP.md created: %s\n", bootstrapPath)
+	fmt.Println()
+	fmt.Println("🎉 Reset complete!")
+	fmt.Println()
+	fmt.Println("Your next conversation will trigger the bootstrap process.")
+	fmt.Println("The bot will re-introduce itself and ask for your name.")
 }
