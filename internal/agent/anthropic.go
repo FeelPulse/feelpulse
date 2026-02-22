@@ -324,7 +324,6 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending request: %s", string(bodyData))
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -370,7 +369,11 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		}
 	}
 
-	log.Printf("📥 [anthropic] response received (%d chars)", len(text))
+	preview := text
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+	log.Printf("📥 [anthropic] response: %s (%d chars, %d in / %d out tokens)", preview, len(text), anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)
 
 	return &types.AgentResponse{
 		Text:  text,
@@ -407,7 +410,6 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending streaming request: %s", string(bodyData))
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -491,7 +493,11 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	}
 
 	text := fullText.String()
-	log.Printf("📥 [anthropic/stream] response received (%d chars)", len(text))
+	preview := text
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+	log.Printf("📥 [anthropic/stream] response: %s (%d chars, %d in / %d out tokens)", preview, len(text), usage.InputTokens, usage.OutputTokens)
 
 	return &types.AgentResponse{
 		Text:  text,
@@ -558,7 +564,11 @@ func (c *AnthropicClient) ChatWithTools(
 		finalText.WriteString(textContent)
 
 		if stopReason != "tool_use" || len(toolUseBlocks) == 0 {
-			log.Printf("📥 [anthropic/agentic] final response (iteration %d, %d chars)", iteration+1, finalText.Len())
+			preview := finalText.String()
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			log.Printf("📥 [anthropic/agentic] final response: %s (iteration %d, %d chars, %d in / %d out tokens)", preview, iteration+1, finalText.Len(), totalUsage.InputTokens, totalUsage.OutputTokens)
 			break
 		}
 
@@ -644,7 +654,6 @@ func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback 
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending streaming request: %s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
@@ -767,7 +776,6 @@ func (c *AnthropicClient) callAPI(reqBody AnthropicRequest) (*AnthropicResponse,
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending request: %s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
