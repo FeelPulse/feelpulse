@@ -96,8 +96,10 @@ func (m *Manager) Load() error {
 
 	// Auto-create BOOTSTRAP.md on first run (when neither BOOTSTRAP nor IDENTITY exist)
 	if m.bootstrap == "" && m.identity == "" {
-		bootstrapPath := filepath.Join(m.path, bootstrapFile)
-		bootstrapContent := `# Bootstrap - First Steps
+		// Ensure workspace directory exists before creating BOOTSTRAP.md
+		if err := os.MkdirAll(m.path, 0755); err == nil {
+			bootstrapPath := filepath.Join(m.path, bootstrapFile)
+			bootstrapContent := `# Bootstrap - First Steps
 
 This is your first time running. Before doing anything else:
 
@@ -119,10 +121,11 @@ This is your first time running. Before doing anything else:
 
 Important: Complete all steps above in your first interaction. Be warm and personable!
 `
-		// Create BOOTSTRAP.md if it doesn't exist
-		if _, err := os.Stat(bootstrapPath); os.IsNotExist(err) {
-			if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0644); err == nil {
-				m.bootstrap = bootstrapContent
+			// Create BOOTSTRAP.md if it doesn't exist
+			if _, err := os.Stat(bootstrapPath); os.IsNotExist(err) {
+				if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0644); err == nil {
+					m.bootstrap = bootstrapContent
+				}
 			}
 		}
 	}
