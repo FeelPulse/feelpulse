@@ -367,7 +367,7 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 	gw.log.Info("🤖 Agent initialized: %s/%s", gw.cfg.Agent.Provider, gw.cfg.Agent.Model)
 
 	// Log system prompt on startup
-	systemPrompt := gw.memory.BuildSystemPrompt("")
+	systemPrompt := gw.memory.BuildSystemPrompt(agent.DefaultSystemPrompt)
 	gw.log.Info("🧠 System prompt:\n%s", systemPrompt)
 
 	// Initialize compactor with summarizer
