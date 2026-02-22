@@ -310,7 +310,6 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		systemPrompt = DefaultSystemPrompt
 	}
 
-	log.Printf("🧠 [anthropic] system prompt: %s", systemPrompt)
 
 	// Build request
 	reqBody := AnthropicRequest{
@@ -391,7 +390,6 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 		systemPrompt = DefaultSystemPrompt
 	}
 
-	log.Printf("🧠 [anthropic] system prompt: %s", systemPrompt)
 
 	// Build request with streaming enabled
 	reqBody := AnthropicRequest{
@@ -532,7 +530,6 @@ func (c *AnthropicClient) ChatWithTools(
 		systemPrompt = DefaultSystemPrompt
 	}
 
-	log.Printf("🧠 [anthropic] system prompt: %s", systemPrompt)
 
 	var totalUsage types.Usage
 	var finalText strings.Builder
