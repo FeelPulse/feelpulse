@@ -323,8 +323,24 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending request: %s", string(bodyData))
+	// Log conversation messages (one per line)
+	for _, msg := range anthropicMsgs {
+		content := ""
+		switch v := msg.Content.(type) {
+		case string:
+			content = v
+		case []ContentBlock:
+			for _, block := range v {
+				if block.Type == "text" {
+					content += block.Text
+				}
+			}
+		}
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		log.Printf("📤 [anthropic] %s: %s", msg.Role, content)
+	}
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -406,8 +422,24 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending streaming request: %s", string(bodyData))
+	// Log conversation messages (one per line)
+	for _, msg := range anthropicMsgs {
+		content := ""
+		switch v := msg.Content.(type) {
+		case string:
+			content = v
+		case []ContentBlock:
+			for _, block := range v {
+				if block.Type == "text" {
+					content += block.Text
+				}
+			}
+		}
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		log.Printf("📤 [anthropic] %s: %s", msg.Role, content)
+	}
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -538,6 +570,27 @@ func (c *AnthropicClient) ChatWithTools(
 	var model string
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
+		// Log conversation messages for this iteration
+		if iteration == 0 {
+			for _, msg := range anthropicMsgs {
+				content := ""
+				switch v := msg.Content.(type) {
+				case string:
+					content = v
+				case []ContentBlock:
+					for _, block := range v {
+						if block.Type == "text" {
+							content += block.Text
+						}
+					}
+				}
+				if len(content) > 200 {
+					content = content[:200] + "..."
+				}
+				log.Printf("📤 [anthropic] %s: %s", msg.Role, content)
+			}
+		}
+
 		reqBody := AnthropicRequest{
 			Model:     c.model,
 			MaxTokens: defaultMaxTokens,
@@ -642,9 +695,6 @@ func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback 
 	if err != nil {
 		return "", nil, "", types.Usage{}, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
-
-	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending streaming request: %s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
@@ -765,9 +815,6 @@ func (c *AnthropicClient) callAPI(reqBody AnthropicRequest) (*AnthropicResponse,
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-
-	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending request: %s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
