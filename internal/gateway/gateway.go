@@ -1007,12 +1007,21 @@ func (gw *Gateway) checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	if gw.cfg.Hooks.Token == "" {
 		return true // no auth configured
 	}
-	token := r.Header.Get("Authorization")
-	if token != "Bearer "+gw.cfg.Hooks.Token {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+
+	// Try Authorization header first (Bearer token)
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "Bearer "+gw.cfg.Hooks.Token {
+		return true
 	}
-	return true
+
+	// Try query parameter (e.g., ?token=xxx for browser access)
+	queryToken := r.URL.Query().Get("token")
+	if queryToken == gw.cfg.Hooks.Token {
+		return true
+	}
+
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	return false
 }
 
 func (gw *Gateway) handleHook(w http.ResponseWriter, r *http.Request) {
