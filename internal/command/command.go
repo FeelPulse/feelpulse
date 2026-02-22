@@ -34,6 +34,7 @@ type AdminProvider interface {
 	GetSystemStats() map[string]any
 	GetAllSessions() []*session.Session
 	ReloadConfig(ctx context.Context) error
+	ResetAllSessions() error
 }
 
 // SubAgentInfo holds info about a sub-agent

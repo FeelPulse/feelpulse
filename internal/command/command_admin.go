@@ -29,12 +29,12 @@ func (h *Handler) handleAdmin(ch, userID, username, args string) string {
 		return h.handleAdminSessions()
 	case "reload":
 		return h.handleAdminReload()
-	case "reborn":
+	case "reset":
 		// Handle confirmation
 		if len(parts) > 1 && strings.ToLower(parts[1]) == "confirm" {
-			return h.handleAdminReborn()
+			return h.handleAdminReset()
 		}
-		return h.handleAdminRebornConfirm()
+		return h.handleAdminResetConfirm()
 	case "":
 		return h.handleAdminHelp()
 	default:
@@ -92,30 +92,41 @@ func (h *Handler) handleAdminReload() string {
 	return "✅ Configuration and workspace files reloaded."
 }
 
-// handleAdminRebornConfirm asks for confirmation before reborn
-func (h *Handler) handleAdminRebornConfirm() string {
-	return `⚠️ *Reborn Confirmation Required*
+// handleAdminResetConfirm asks for confirmation before reset
+func (h *Handler) handleAdminResetConfirm() string {
+	return `⚠️ *Reset Confirmation Required*
 
 This will:
-- Remove your current IDENTITY.md
+- Clear ALL session history (conversations, reminders, sub-agents, pins)
+- Remove IDENTITY.md, MEMORY.md, and memory/ directory
 - Create a new BOOTSTRAP.md
 - Reset you to "first-time" state
-- You will re-introduce yourself and ask for names
 
 **This cannot be undone.**
 
-To confirm, send: ` + "`/admin reborn confirm`"
+User config files are preserved:
+- AGENTS.md, SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md
+
+To confirm, send: ` + "`/admin reset confirm`"
 }
 
-// handleAdminReborn performs the reborn operation
-func (h *Handler) handleAdminReborn() string {
+// handleAdminReset performs the complete reset operation
+func (h *Handler) handleAdminReset() string {
 	if h.memory == nil {
 		return "❌ Memory manager not available."
 	}
 
-	path, err := h.memory.Reborn()
+	// Reset memory files
+	path, err := h.memory.Reset()
 	if err != nil {
-		return fmt.Sprintf("❌ Reborn failed: %v", err)
+		return fmt.Sprintf("❌ Memory reset failed: %v", err)
+	}
+
+	// Reset all sessions and database
+	if h.admin != nil {
+		if err := h.admin.ResetAllSessions(); err != nil {
+			return fmt.Sprintf("⚠️ Memory cleared but session reset failed: %v", err)
+		}
 	}
 
 	// Trigger skill reload callback if set (to refresh system prompt)
@@ -125,7 +136,7 @@ func (h *Handler) handleAdminReborn() string {
 		}
 	}
 
-	return fmt.Sprintf("✅ Reborn complete!\n\nBOOTSTRAP.md created at: %s\n\nYour next message will trigger the bootstrap process.", path)
+	return fmt.Sprintf("✅ Reset complete!\n\nCleared:\n- All sessions and conversation history\n- All reminders, sub-agents, and pins\n- IDENTITY.md, MEMORY.md, memory/ directory\n\nBOOTSTRAP.md created at: %s\n\nYour next message will trigger the bootstrap process.", path)
 }
 
 // handleAdminHelp shows admin commands
@@ -135,5 +146,5 @@ func (h *Handler) handleAdminHelp() string {
   /admin stats — System statistics
   /admin sessions — All active sessions  
   /admin reload — Reload config + workspace
-  /admin reborn — Reset to first-time state (requires confirmation)`
+  /admin reset — Clear all memory & sessions (requires confirmation)`
 }

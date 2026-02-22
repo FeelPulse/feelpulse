@@ -212,12 +212,23 @@ func DefaultWorkspacePath() string {
 
 // Reborn resets the workspace to initial state by recreating BOOTSTRAP.md
 // and removing IDENTITY.md. Returns the path to the created BOOTSTRAP.md.
-func (m *Manager) Reborn() (string, error) {
+// Reset clears all memory and session state, starting fresh
+// Removes: IDENTITY.md, MEMORY.md, memory/ directory
+// Keeps: AGENTS.md, SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md (user config)
+func (m *Manager) Reset() (string, error) {
 	bootstrapPath := filepath.Join(m.path, bootstrapFile)
 	identityPath := filepath.Join(m.path, identityFile)
+	memoryPath := filepath.Join(m.path, memoryFile)
+	memoryDir := filepath.Join(m.path, "memory")
 
-	// Remove IDENTITY.md if it exists
+	// Remove IDENTITY.md
 	_ = os.Remove(identityPath)
+
+	// Remove MEMORY.md
+	_ = os.Remove(memoryPath)
+
+	// Remove memory/ directory (daily logs)
+	_ = os.RemoveAll(memoryDir)
 
 	// Recreate BOOTSTRAP.md
 	bootstrapContent := `# Bootstrap - First Steps

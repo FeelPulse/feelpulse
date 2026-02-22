@@ -312,6 +312,13 @@ func (s *Store) ClearAndPersist(channel, userID string) {
 	}
 }
 
+// ClearAll removes all sessions from memory (does NOT clear database)
+func (s *Store) ClearAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = make(map[string]*Session)
+}
+
 // SetModel sets a per-session model override
 func (sess *Session) SetModel(model string) {
 	sess.mu.Lock()

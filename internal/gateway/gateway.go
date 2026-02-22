@@ -1107,6 +1107,26 @@ func (gw *Gateway) ReloadConfig(ctx context.Context) error {
 	return nil
 }
 
+// ResetAllSessions clears all sessions and database state
+func (gw *Gateway) ResetAllSessions() error {
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+
+	// Clear in-memory sessions
+	if gw.sessions != nil {
+		gw.sessions.ClearAll()
+	}
+
+	// Clear database
+	if gw.db != nil {
+		if err := gw.db.ClearAll(); err != nil {
+			return fmt.Errorf("database clear failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // ListSubAgents returns all sub-agents for command handler
 func (gw *Gateway) ListSubAgents() []command.SubAgentInfo {
 	if gw.subagentManager == nil {

@@ -490,3 +490,47 @@ func TestSQLiteStore_CleanExpiredReminders(t *testing.T) {
 		t.Errorf("wrong reminder remaining: %s", reminders[0].ID)
 	}
 }
+
+func TestSQLiteStore_ClearAll(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Add some sessions
+	msgs1 := []types.Message{{ID: "1", Text: "test1", From: "user", Channel: "telegram", Timestamp: time.Now()}}
+	msgs2 := []types.Message{{ID: "2", Text: "test2", From: "user", Channel: "telegram", Timestamp: time.Now()}}
+	if err := store.Save("session1", msgs1, "model1"); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	if err := store.Save("session2", msgs2, "model2"); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	// Verify sessions exist
+	keys, err := store.ListKeys()
+	if err != nil {
+		t.Fatalf("ListKeys failed: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("Expected 2 sessions, got %d", len(keys))
+	}
+
+	// Clear all
+	if err := store.ClearAll(); err != nil {
+		t.Fatalf("ClearAll failed: %v", err)
+	}
+
+	// Verify all sessions are gone
+	keys, err = store.ListKeys()
+	if err != nil {
+		t.Fatalf("ListKeys failed: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("Expected 0 sessions after ClearAll, got %d", len(keys))
+	}
+}

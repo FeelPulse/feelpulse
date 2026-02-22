@@ -142,6 +142,30 @@ func (s *SQLiteStore) Delete(key string) error {
 	return nil
 }
 
+// ClearAll removes all sessions, reminders, sub-agents, and pins from the database
+func (s *SQLiteStore) ClearAll() error {
+	tables := []string{"sessions", "reminders", "sub_agents", "pins"}
+	for _, table := range tables {
+		// Check if table exists first
+		var count int
+		err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+			table,
+		).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("failed to check table %s: %w", table, err)
+		}
+
+		// Only delete if table exists
+		if count > 0 {
+			if _, err := s.db.Exec(fmt.Sprintf("DELETE FROM %s", table)); err != nil {
+				return fmt.Errorf("failed to clear %s: %w", table, err)
+			}
+		}
+	}
+	return nil
+}
+
 // ListKeys returns all session keys in the database
 func (s *SQLiteStore) ListKeys() ([]string, error) {
 	rows, err := s.db.Query(`SELECT key FROM sessions ORDER BY updated_at DESC`)
