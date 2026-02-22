@@ -136,13 +136,32 @@ func cmdSkillsList() {
 }
 
 func cmdInit() {
+	// Create config
 	cfg := config.Default()
-	path, err := config.Save(cfg)
+	configPath, err := config.Save(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating config: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("✅ Config created: %s\n", path)
+	fmt.Printf("✅ Config created: %s\n", configPath)
+
+	// Create workspace
+	workspacePath := cfg.Workspace.Path
+	if workspacePath == "" {
+		workspacePath = memory.DefaultWorkspacePath()
+	}
+
+	if err := memory.InitWorkspace(workspacePath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Error initializing workspace: %v\n", err)
+		fmt.Println("   (You can manually run 'feelpulse workspace init' later)")
+	} else {
+		fmt.Printf("✅ Workspace initialized: %s\n", workspacePath)
+	}
+
+	fmt.Println("\n🎉 Initialization complete!")
+	fmt.Println("\nNext steps:")
+	fmt.Println("  1. Configure authentication: feelpulse auth")
+	fmt.Println("  2. Start the gateway: feelpulse start")
 }
 
 func cmdStart() {
