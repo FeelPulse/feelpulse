@@ -221,6 +221,11 @@ func (m *Manager) Reset() (string, error) {
 	memoryPath := filepath.Join(m.path, memoryFile)
 	memoryDir := filepath.Join(m.path, "memory")
 
+	// Ensure workspace directory exists
+	if err := os.MkdirAll(m.path, 0755); err != nil {
+		return "", fmt.Errorf("failed to create workspace directory: %w", err)
+	}
+
 	// Remove IDENTITY.md
 	_ = os.Remove(identityPath)
 
