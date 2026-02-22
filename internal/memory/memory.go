@@ -94,6 +94,39 @@ func (m *Manager) Load() error {
 		}
 	}
 
+	// Auto-create BOOTSTRAP.md on first run (when neither BOOTSTRAP nor IDENTITY exist)
+	if m.bootstrap == "" && m.identity == "" {
+		bootstrapPath := filepath.Join(m.path, bootstrapFile)
+		bootstrapContent := `# Bootstrap - First Steps
+
+This is your first time running. Before doing anything else:
+
+1. Greet the user warmly and introduce yourself as an AI assistant
+2. Ask the user what their name is
+3. Ask the user what they would like to call you (your name/identity)
+4. Write your identity information to IDENTITY.md in this format:
+
+` + "```" + `
+# Identity
+
+- My name: <name you chose>
+- User's name: <their name>
+- Created: <current date in YYYY-MM-DD format>
+` + "```" + `
+
+5. Delete this BOOTSTRAP.md file using file_write with empty content or exec rm
+6. Thank the user warmly and ask how you can help them today
+
+Important: Complete all steps above in your first interaction. Be warm and personable!
+`
+		// Create BOOTSTRAP.md if it doesn't exist
+		if _, err := os.Stat(bootstrapPath); os.IsNotExist(err) {
+			if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0644); err == nil {
+				m.bootstrap = bootstrapContent
+			}
+		}
+	}
+
 	return nil
 }
 
