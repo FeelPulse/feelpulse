@@ -215,19 +215,14 @@ func DefaultWorkspacePath() string {
 
 // Reborn resets the workspace to initial state by recreating BOOTSTRAP.md
 // and removing IDENTITY.md. Returns the path to the created BOOTSTRAP.md.
-// Reset clears all memory and session state, starting fresh
+// Reset clears all memory and session state
 // Removes: IDENTITY.md, MEMORY.md, memory/ directory
 // Keeps: AGENTS.md, SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md (user config)
-func (m *Manager) Reset() (string, error) {
-	bootstrapPath := filepath.Join(m.path, bootstrapFile)
+// Does NOT create BOOTSTRAP.md (next start will auto-create it via Load())
+func (m *Manager) Reset() error {
 	identityPath := filepath.Join(m.path, identityFile)
 	memoryPath := filepath.Join(m.path, memoryFile)
 	memoryDir := filepath.Join(m.path, "memory")
-
-	// Ensure workspace directory exists
-	if err := os.MkdirAll(m.path, 0755); err != nil {
-		return "", fmt.Errorf("failed to create workspace directory: %w", err)
-	}
 
 	// Remove IDENTITY.md
 	_ = os.Remove(identityPath)
@@ -238,38 +233,7 @@ func (m *Manager) Reset() (string, error) {
 	// Remove memory/ directory (daily logs)
 	_ = os.RemoveAll(memoryDir)
 
-	// Recreate BOOTSTRAP.md
-	bootstrapContent := `# Bootstrap - First Steps
-
-This is a fresh start. Before doing anything else:
-
-1. Greet the user warmly and introduce yourself as an AI assistant
-2. Ask the user what their name is
-3. Ask the user what they would like to call you (your name/identity)
-4. Write your identity information to IDENTITY.md in this format:
-
-` + "```" + `
-# Identity
-
-- My name: <name you chose>
-- User's name: <their name>
-- Created: <current date in YYYY-MM-DD format>
-` + "```" + `
-
-5. Delete this BOOTSTRAP.md file using file_write with empty content or exec rm
-6. Thank the user warmly and ask how you can help them today
-
-Important: Complete all steps above in your first interaction. Be warm and personable!
-`
-
-	if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0644); err != nil {
-		return "", err
-	}
-
-	// Reload to pick up the new BOOTSTRAP.md
-	m.Load()
-
-	return bootstrapPath, nil
+	return nil
 }
 
 // InitWorkspace creates the workspace directory and template files.

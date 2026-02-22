@@ -438,21 +438,15 @@ func cmdReset() {
 
 	// Reset memory files
 	mgr := memory.NewManager(workspacePath)
-	if err := mgr.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Warning: %v\n", err)
-	}
-
-	bootstrapPath, err := mgr.Reset()
-	if err != nil {
+	if err := mgr.Reset(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Memory reset failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Println("✅ Memory cleared")
-	fmt.Printf("✅ BOOTSTRAP.md created: %s\n", bootstrapPath)
 	fmt.Println()
 	fmt.Println("🎉 Reset complete!")
 	fmt.Println()
-	fmt.Println("Your next conversation will trigger the bootstrap process.")
-	fmt.Println("The bot will re-introduce itself and ask for your name.")
+	fmt.Println("Next time you start FeelPulse, it will run the bootstrap process.")
+	fmt.Println("The bot will introduce itself and ask for your name.")
 }

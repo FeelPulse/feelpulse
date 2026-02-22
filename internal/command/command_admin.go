@@ -99,8 +99,6 @@ func (h *Handler) handleAdminResetConfirm() string {
 This will:
 - Clear ALL session history (conversations, reminders, sub-agents, pins)
 - Remove IDENTITY.md, MEMORY.md, and memory/ directory
-- Create a new BOOTSTRAP.md
-- Reset you to "first-time" state
 
 **This cannot be undone.**
 
@@ -117,8 +115,7 @@ func (h *Handler) handleAdminReset() string {
 	}
 
 	// Reset memory files
-	path, err := h.memory.Reset()
-	if err != nil {
+	if err := h.memory.Reset(); err != nil {
 		return fmt.Sprintf("❌ Memory reset failed: %v", err)
 	}
 
@@ -132,11 +129,11 @@ func (h *Handler) handleAdminReset() string {
 	// Trigger skill reload callback if set (to refresh system prompt)
 	if skillReloadCallback != nil {
 		if err := skillReloadCallback(); err != nil {
-			return fmt.Sprintf("⚠️ BOOTSTRAP.md created but reload failed: %v", err)
+			return "⚠️ Memory cleared but reload failed: %v"
 		}
 	}
 
-	return fmt.Sprintf("✅ Reset complete!\n\nCleared:\n- All sessions and conversation history\n- All reminders, sub-agents, and pins\n- IDENTITY.md, MEMORY.md, memory/ directory\n\nBOOTSTRAP.md created at: %s\n\nYour next message will trigger the bootstrap process.", path)
+	return "✅ Reset complete!\n\nCleared:\n- All sessions and conversation history\n- All reminders, sub-agents, and pins\n- IDENTITY.md, MEMORY.md, memory/ directory\n\nYour next message will trigger the bootstrap process."
 }
 
 // handleAdminHelp shows admin commands
