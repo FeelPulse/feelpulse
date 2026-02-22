@@ -369,12 +369,6 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		}
 	}
 
-	preview := text
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-	log.Printf("📥 [anthropic] response: %s (%d chars, %d in / %d out tokens)", preview, len(text), anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)
-
 	return &types.AgentResponse{
 		Text:  text,
 		Model: anthropicResp.Model,
@@ -493,11 +487,6 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	}
 
 	text := fullText.String()
-	preview := text
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-	log.Printf("📥 [anthropic/stream] response: %s (%d chars, %d in / %d out tokens)", preview, len(text), usage.InputTokens, usage.OutputTokens)
 
 	return &types.AgentResponse{
 		Text:  text,
@@ -564,11 +553,6 @@ func (c *AnthropicClient) ChatWithTools(
 		finalText.WriteString(textContent)
 
 		if stopReason != "tool_use" || len(toolUseBlocks) == 0 {
-			preview := finalText.String()
-			if len(preview) > 200 {
-				preview = preview[:200] + "..."
-			}
-			log.Printf("📥 [anthropic/agentic] final response: %s (iteration %d, %d chars, %d in / %d out tokens)", preview, iteration+1, finalText.Len(), totalUsage.InputTokens, totalUsage.OutputTokens)
 			break
 		}
 
