@@ -323,6 +323,9 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// Log the full request payload
+	log.Printf("📤 [anthropic] Sending request:\n%s", string(bodyData))
+
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
@@ -402,6 +405,9 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+
+	// Log the full request payload
+	log.Printf("📤 [anthropic] Sending streaming request:\n%s", string(bodyData))
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -637,6 +643,9 @@ func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback 
 		return "", nil, "", types.Usage{}, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// Log the full request payload
+	log.Printf("📤 [anthropic] Sending streaming request:\n%s", string(bodyData))
+
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
 		return "", nil, "", types.Usage{}, "", fmt.Errorf("failed to create request: %w", err)
@@ -756,6 +765,9 @@ func (c *AnthropicClient) callAPI(reqBody AnthropicRequest) (*AnthropicResponse,
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+
+	// Log the full request payload
+	log.Printf("📤 [anthropic] Sending request:\n%s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
