@@ -324,7 +324,7 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending request:\n%s", string(bodyData))
+	log.Printf("📤 [anthropic] Sending request: %s", string(bodyData))
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -407,7 +407,7 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending streaming request:\n%s", string(bodyData))
+	log.Printf("📤 [anthropic] Sending streaming request: %s", string(bodyData))
 
 	// Create HTTP request
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
@@ -644,7 +644,7 @@ func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback 
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending streaming request:\n%s", string(bodyData))
+	log.Printf("📤 [anthropic] Sending streaming request: %s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
@@ -767,7 +767,7 @@ func (c *AnthropicClient) callAPI(reqBody AnthropicRequest) (*AnthropicResponse,
 	}
 
 	// Log the full request payload
-	log.Printf("📤 [anthropic] Sending request:\n%s", string(bodyData))
+	log.Printf("📤 [anthropic] Sending request: %s", string(bodyData))
 
 	req, err := http.NewRequest(http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyData))
 	if err != nil {
