@@ -126,6 +126,9 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 
 	// Get system prompt from config, optionally enhanced by prompt builder
 	systemPrompt := r.cfg.Agent.System
+	if systemPrompt == "" {
+		systemPrompt = DefaultSystemPrompt
+	}
 	if r.promptBuilder != nil {
 		systemPrompt = r.promptBuilder(systemPrompt)
 	}
