@@ -111,16 +111,23 @@ func (m *Manager) BuildSystemPrompt(defaultPrompt string) string {
 		parts = append(parts, "\n\n## Memory\n"+m.memory)
 	}
 
-	// Inject workspace path so bot knows where to clone repos
-	parts = append(parts, "\n\n## Workspace\nWorkspace path: "+m.path+"\nAll file operations (file_read, file_write, file_list) are sandboxed to this directory.\nAlways clone git repos here: git clone <url> "+m.path+"/<repo-name>")
+	// Workspace section
+	parts = append(parts, fmt.Sprintf(`
 
-	// List available skills (loaded on demand via read_skill tool)
+## Workspace
+
+Working directory: %s
+
+All file operations (file_read, file_write, file_list) are sandboxed to this directory.
+Always clone git repos here: git clone <url> %s/<repo-name>`, m.path, m.path))
+
+	// Available skills section
 	if len(m.skills) > 0 {
-		var lines []string
+		skillsList := "\n\n## Available Skills\n\nThe following skills are installed. Use `read_skill` to load full documentation on demand:\n\n"
 		for _, s := range m.skills {
-			lines = append(lines, "- **"+s.Name+"**: "+s.Description)
+			skillsList += fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description)
 		}
-		parts = append(parts, "\n\n## Available Skills\n\nUse the `read_skill` tool to load a skill's full documentation before using it.\n\n"+strings.Join(lines, "\n"))
+		parts = append(parts, skillsList)
 	}
 
 	result := strings.Join(parts, "")
