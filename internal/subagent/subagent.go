@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/internal/tools"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -194,6 +195,8 @@ func (m *Manager) Spawn(
 ) string {
 	id := generateID()
 
+	logger.Debug("🤖 Manager.Spawn called: label='%s', parent_session='%s'", label, parentSessionKey)
+
 	// Create sub-agent
 	agent := &SubAgent{
 		ID:               id,
@@ -220,9 +223,21 @@ func (m *Manager) Spawn(
 
 	// Filter tools: remove spawn_agent to prevent recursive spawning
 	filteredRegistry := filterTools(toolRegistry)
+	
+	// Log filtered tool count
+	originalCount := 0
+	if toolRegistry != nil {
+		originalCount = len(toolRegistry.List())
+	}
+	filteredCount := 0
+	if filteredRegistry != nil {
+		filteredCount = len(filteredRegistry.List())
+	}
+	logger.Debug("🤖 Tools filtered: %d → %d (removed spawn_agent)", originalCount, filteredCount)
 
 	// Create context with session key for tool execution
 	ctxWithSession := context.WithValue(ctx, "parent_session_key", parentSessionKey)
+	logger.Debug("🤖 Created context with parent_session_key: %s", parentSessionKey)
 
 	// Run the agent in a goroutine
 	go m.runAgent(ctxWithSession, agent, runner, filteredRegistry)
@@ -275,9 +290,27 @@ Your task: %s
 You have access to tools. Use them to complete the task. Tool list will be provided by the system.
 
 Complete the task and provide your final answer.`, agent.Task)
+		
+		// Log system prompt details
+		logger.Debug("🤖 Sub-agent '%s' using default system prompt", agent.Label)
+	} else {
+		logger.Debug("🤖 Sub-agent '%s' using custom system prompt", agent.Label)
+	}
+	
+	// Log available tools
+	if toolRegistry != nil {
+		toolList := toolRegistry.List()
+		toolNames := make([]string, len(toolList))
+		for i, t := range toolList {
+			toolNames[i] = t.Name
+		}
+		logger.Debug("🤖 Sub-agent '%s' has %d tools: %s", agent.Label, len(toolList), strings.Join(toolNames, ", "))
+	} else {
+		logger.Warn("⚠️ Sub-agent '%s' has NO tools available", agent.Label)
 	}
 
 	// Run the task
+	logger.Debug("🤖 Sub-agent '%s' starting task execution...", agent.Label)
 	result, err := runner.RunTask(ctx, agent.Task, systemPrompt, toolRegistry)
 
 	// Update agent state

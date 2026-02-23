@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/internal/tools"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -38,9 +39,14 @@ func NewSimpleRunner(chatFunc ChatWithToolsFunc, maxIterations int) *SimpleRunne
 func (r *SimpleRunner) RunTask(ctx context.Context, task string, systemPrompt string, toolRegistry *tools.Registry) (string, error) {
 	// Extract parent session key from context if available
 	metadata := make(map[string]any)
+	var sessionKey string
 	if parentKey, ok := ctx.Value("parent_session_key").(string); ok && parentKey != "" {
 		metadata["session_key"] = parentKey
+		sessionKey = parentKey
 	}
+	
+	// Log initial task setup
+	logger.Debug("🤖 RunTask: session_key=%s, tools=%d", sessionKey, len(toolRegistry.List()))
 	
 	// Build initial message with the task
 	messages := []types.Message{
@@ -52,6 +58,8 @@ func (r *SimpleRunner) RunTask(ctx context.Context, task string, systemPrompt st
 			Metadata:  metadata,
 		},
 	}
+	
+	logger.Debug("🤖 Initial message metadata: %+v", metadata)
 
 	// Create a channel for the result
 	type result struct {

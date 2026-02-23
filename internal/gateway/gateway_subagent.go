@@ -180,7 +180,9 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 		// Build Anthropic tools from registry
 		var anthropicTools []agent.AnthropicTool
 		if toolRegistry != nil {
-			for _, tool := range toolRegistry.List() {
+			toolList := toolRegistry.List()
+			gw.log.Debug("🤖 Building Anthropic tools from %d available tools", len(toolList))
+			for _, tool := range toolList {
 				schema := tool.ToAnthropicSchema()
 				inputSchemaBytes, _ := json.Marshal(schema["input_schema"])
 				anthropicTools = append(anthropicTools, agent.AnthropicTool{
@@ -188,30 +190,43 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 					Description: tool.Description,
 					InputSchema: inputSchemaBytes,
 				})
+				gw.log.Debug("🤖   - %s: %s", tool.Name, tool.Description)
 			}
+		} else {
+			gw.log.Warn("⚠️ Sub-agent toolRegistry is nil")
 		}
 
 		// Create tool executor with session context
 		// Extract session key from messages if available
 		sessionKey := "unknown"
+		gw.log.Debug("🤖 createSubAgentChatFunc: extracting session key from %d messages", len(messages))
 		if len(messages) > 0 {
 			for i := len(messages) - 1; i >= 0; i-- {
 				msg := messages[i]
+				gw.log.Debug("🤖 Message %d metadata: %+v", i, msg.Metadata)
 				if msg.Metadata != nil {
 					if sk, ok := msg.Metadata["session_key"].(string); ok && sk != "" {
 						sessionKey = sk
+						gw.log.Debug("🤖 Found session_key in message %d: %s", i, sessionKey)
 						break
 					}
 				}
 			}
 		}
+		if sessionKey == "unknown" {
+			gw.log.Warn("⚠️ No session_key found in sub-agent messages")
+		}
 		
 		executor := func(name string, input map[string]any) (string, error) {
+			gw.log.Debug("🤖 Sub-agent calling tool '%s' with session_key: %s", name, sessionKey)
+			
 			if toolRegistry == nil {
+				gw.log.Error("❌ Sub-agent tool executor: toolRegistry is nil")
 				return "", fmt.Errorf("no tools available")
 			}
 			tool := toolRegistry.Get(name)
 			if tool == nil {
+				gw.log.Error("❌ Sub-agent tool executor: tool '%s' not found", name)
 				return "", fmt.Errorf("unknown tool: %s", name)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -219,8 +234,15 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 			
 			// Inject session key for tools that need it
 			ctx = context.WithValue(ctx, "session_key", sessionKey)
+			gw.log.Debug("🤖 Executing sub-agent tool '%s' with context session_key=%s", name, sessionKey)
 			
-			return tool.Handler(ctx, input)
+			result, err := tool.Handler(ctx, input)
+			if err != nil {
+				gw.log.Debug("🤖 Sub-agent tool '%s' failed: %v", name, err)
+			} else {
+				gw.log.Debug("🤖 Sub-agent tool '%s' succeeded (%d chars)", name, len(result))
+			}
+			return result, err
 		}
 
 		// Run the agentic loop
