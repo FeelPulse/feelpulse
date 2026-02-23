@@ -20,11 +20,6 @@ import (
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
-// StreamingHandler is called to process a message with streaming support.
-// It should call onDelta for each text chunk as it arrives.
-// Returns the final response text and error.
-type StreamingHandler func(msg *types.Message, onDelta func(delta string)) (*types.Message, error)
-
 // TelegramBot handles Telegram Bot API interactions
 type TelegramBot struct {
 	token   string
@@ -32,13 +27,12 @@ type TelegramBot struct {
 	client  *http.Client
 	offset  int64
 
-	handler          func(msg *types.Message) (*types.Message, error)
-	streamingHandler StreamingHandler
-	callbackHandler  func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
-	allowedUsers     []string // empty = allow all; non-empty = only these usernames
-	mu               sync.Mutex
-	running          bool
-	cancel           context.CancelFunc
+	handler         func(msg *types.Message) (*types.Message, error)
+	callbackHandler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
+	allowedUsers    []string // empty = allow all; non-empty = only these usernames
+	mu              sync.Mutex
+	running         bool
+	cancel          context.CancelFunc
 }
 
 // TelegramUpdate represents a Telegram update from getUpdates
@@ -121,12 +115,6 @@ func NewTelegramBot(token string) *TelegramBot {
 // SetHandler sets the message handler function
 func (t *TelegramBot) SetHandler(handler func(msg *types.Message) (*types.Message, error)) {
 	t.handler = handler
-}
-
-// SetStreamingHandler sets the streaming message handler function
-// When set, this handler is used instead of the regular handler for streaming responses.
-func (t *TelegramBot) SetStreamingHandler(handler StreamingHandler) {
-	t.streamingHandler = handler
 }
 
 // SetCallbackHandler sets the callback query handler function
@@ -280,7 +268,7 @@ func (t *TelegramBot) poll(ctx context.Context) error {
 
 // handleMessage processes an incoming message
 func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage) {
-	if t.handler == nil && t.streamingHandler == nil {
+	if t.handler == nil {
 		return
 	}
 
@@ -319,28 +307,14 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	log.Printf("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
 
-	var reply *types.Message
-	var err error
-
-	// Use streaming handler if available
-	if t.streamingHandler != nil {
-		// Send typing indicator (will be replaced by "Thinking..." message)
-		_ = t.SendTypingAction(tgMsg.Chat.ID)
-		reply, err = t.handleMessageWithStreaming(ctx, tgMsg.Chat.ID, msg)
-	} else {
-		// Send typing indicator
-		_ = t.SendTypingAction(tgMsg.Chat.ID)
-		// Call regular handler
-		reply, err = t.handler(msg)
-	}
+	// Send typing indicator
+	_ = t.SendTypingAction(tgMsg.Chat.ID)
+	
+	// Call handler
+	reply, err := t.handler(msg)
 
 	if err != nil {
 		log.Printf("❌ Handler error: %v", err)
-		return
-	}
-
-	// For streaming, the message was already sent/updated
-	if t.streamingHandler != nil {
 		return
 	}
 
@@ -351,7 +325,7 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 // handlePhotoMessage processes an incoming photo message
 func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMessage) {
-	if t.handler == nil && t.streamingHandler == nil {
+	if t.handler == nil {
 		return
 	}
 
@@ -446,23 +420,10 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 		log.Printf("⚠️ Failed to send typing action: %v", err)
 	}
 
-	var reply *types.Message
-
-	// Use streaming handler if available
-	if t.streamingHandler != nil {
-		reply, err = t.handleMessageWithStreaming(ctx, tgMsg.Chat.ID, msg)
-	} else {
-		// Call regular handler
-		reply, err = t.handler(msg)
-	}
-
+	// Call handler
+	reply, err := t.handler(msg)
 	if err != nil {
 		log.Printf("❌ Handler error: %v", err)
-		return
-	}
-
-	// For streaming, the message was already sent/updated
-	if t.streamingHandler != nil {
 		return
 	}
 
@@ -473,128 +434,6 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 
 // handleMessageWithStreaming processes a message using streaming with message editing.
 // Uses typing indicator while waiting, then sends/edits a real message once content arrives.
-func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int64, msg *types.Message) (*types.Message, error) {
-	// Track accumulated text and last update time
-	var accumulated strings.Builder
-	var mu sync.Mutex
-	var lastUpdate time.Time
-	var lastSentText string
-	var streamMsgID int64 // 0 until first message is sent
-	updateInterval := 500 * time.Millisecond
-
-	// Send typing indicator while waiting for first token
-	_ = t.SendTypingAction(chatID)
-	lastTyping := time.Now()
-
-	// Create delta handler that updates the message periodically
-	onDelta := func(delta string) {
-		mu.Lock()
-		accumulated.WriteString(delta)
-		currentText := accumulated.String()
-		sinceUpdate := time.Since(lastUpdate)
-		msgID := streamMsgID
-		mu.Unlock()
-
-		// No message sent yet — send the first one when we have content (with markdown to preserve newlines)
-		if msgID == 0 && currentText != "" {
-			displayText := currentText
-			if len(displayText) > 4000 {
-				displayText = displayText[:4000] + "..."
-			}
-			newID, err := t.SendMessageAndGetID(chatID, displayText, true)
-			if err != nil {
-				log.Printf("⚠️ Failed to send streaming message: %v", err)
-				return
-			}
-			mu.Lock()
-			streamMsgID = newID
-			lastSentText = displayText
-			lastUpdate = time.Now()
-			mu.Unlock()
-			return
-		}
-
-		// Message exists — edit it periodically (with markdown to preserve newlines)
-		if msgID != 0 && sinceUpdate >= updateInterval && currentText != "" {
-			displayText := currentText
-			if len(displayText) > 4000 {
-				displayText = displayText[:4000] + "..."
-			}
-			if displayText == lastSentText {
-				return
-			}
-			if err := t.EditMessageTextMarkdown(chatID, msgID, displayText, nil, true); err != nil {
-				log.Printf("⚠️ Failed to update streaming message: %v", err)
-			} else {
-				mu.Lock()
-				lastSentText = displayText
-				lastUpdate = time.Now()
-				mu.Unlock()
-			}
-			return
-		}
-
-		// Keep typing indicator alive while waiting for first content
-		if msgID == 0 && time.Since(lastTyping) > 4*time.Second {
-			_ = t.SendTypingAction(chatID)
-			lastTyping = time.Now()
-		}
-	}
-
-	// Call streaming handler
-	reply, err := t.streamingHandler(msg, onDelta)
-	if err != nil {
-		mu.Lock()
-		msgID := streamMsgID
-		mu.Unlock()
-		if msgID != 0 {
-			_ = t.EditMessageText(chatID, msgID, "❌ Sorry, I encountered an error processing your message.", nil)
-		} else {
-			_ = t.SendMessage(chatID, "❌ Sorry, I encountered an error processing your message.", false)
-		}
-		return nil, err
-	}
-
-	// Final update with complete response
-	if reply != nil && reply.Text != "" {
-		parts := SplitLongMessage(reply.Text, SafeMessageLength)
-
-		mu.Lock()
-		msgID := streamMsgID
-		sent := lastSentText
-		mu.Unlock()
-
-		// First part: edit existing message or send new one
-		finalDisplay := parts[0]
-		if len(finalDisplay) > 4000 {
-			finalDisplay = finalDisplay[:4000] + "..."
-		}
-
-		if msgID != 0 {
-			if finalDisplay != sent {
-				if err := t.EditMessageText(chatID, msgID, parts[0], nil); err != nil {
-					// Markdown failed — fallback to plain text
-					_ = t.EditMessageTextMarkdown(chatID, msgID, parts[0], nil, false)
-				}
-			}
-		} else {
-			// Never got any streaming deltas — send the full reply
-			if err := t.SendMessage(chatID, parts[0], true); err != nil {
-				log.Printf("❌ Failed to send reply: %v", err)
-			}
-		}
-
-		// Additional parts: send as new messages
-		for i := 1; i < len(parts); i++ {
-			if err := t.SendMessage(chatID, parts[i], true); err != nil {
-				log.Printf("❌ Failed to send continuation message: %v", err)
-			}
-		}
-	}
-
-	return reply, nil
-}
-
 // sendReply sends a reply message handling special cases (export, keyboard)
 func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 	// Check if this is an export response (should send as file)

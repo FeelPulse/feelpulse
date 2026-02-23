@@ -398,7 +398,6 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 
 	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
 	telegram.SetHandler(gw.handleMessage)
-	telegram.SetStreamingHandler(gw.handleMessageStreaming)
 	telegram.SetCallbackHandler(gw.handleTelegramCallback)
 	telegram.SetAllowedUsers(gw.cfg.Channels.Telegram.AllowedUsers)
 
@@ -415,7 +414,7 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 	gw.telegram = telegram
 	gw.mu.Unlock()
 
-	gw.log.Info("📱 Telegram streaming enabled for responsive UX")
+	gw.log.Info("📱 Telegram bot started")
 }
 
 // initializeHeartbeat sets up the heartbeat service
@@ -831,42 +830,6 @@ func (gw *Gateway) finalizeMessageProcessing(msg *types.Message, ctx *messagePro
 			ctx.reqLog.Warn("Failed to write daily log: %v", err)
 		}
 	}
-}
-
-// handleMessageStreaming processes messages with streaming support for Telegram
-func (gw *Gateway) handleMessageStreaming(msg *types.Message, onDelta func(delta string)) (reply *types.Message, err error) {
-	ctx, earlyReply := gw.prepareMessageProcessing(msg)
-	if earlyReply != nil {
-		return earlyReply, nil
-	}
-	defer gw.activeRequests.Done() // single Done, always runs
-
-	// Panic recovery - ensure we don't crash from unexpected panics
-	defer func() {
-		if r := recover(); r != nil {
-			ctx.reqLog.Error("panic in handleMessageStreaming: %v", r)
-			reply = &types.Message{
-				Text:    "❌ An unexpected error occurred. Please try again.",
-				Channel: msg.Channel,
-				IsBot:   true,
-			}
-			err = nil // Return gracefully instead of crashing
-		}
-	}()
-
-	// Route to agent with streaming callback
-	reply, err = ctx.router.ProcessWithHistoryStream(ctx.history, agent.StreamCallback(onDelta))
-	if err != nil {
-		ctx.reqLog.Error("Agent error: %v", err)
-		return &types.Message{
-			Text:    "❌ Sorry, I encountered an error processing your message.",
-			Channel: msg.Channel,
-			IsBot:   true,
-		}, nil
-	}
-
-	gw.finalizeMessageProcessing(msg, ctx, reply)
-	return reply, nil
 }
 
 // handleMessage processes incoming messages from channels
