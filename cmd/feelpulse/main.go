@@ -52,10 +52,11 @@ Usage:
 Commands:
   setup          Initial setup (creates config, starts gateway daemon)
   gw             Gateway management
-    logs         View gateway logs (live, Ctrl+C to exit)
+    start        Start gateway daemon
+    stop         Stop gateway daemon
+    restart      Restart gateway daemon
     status       Check gateway status
-    restart      Restart gateway
-    stop         Stop gateway
+    logs         View gateway logs (live, Ctrl+C to exit)
   reset          Clear all memory and sessions (requires confirmation)
   version        Print version
   help           Show this help`)
@@ -65,22 +66,25 @@ func cmdGateway() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: feelpulse gw <command>")
 		fmt.Println("\nCommands:")
-		fmt.Println("  logs       View gateway logs (live, press Ctrl+C to exit)")
-		fmt.Println("  status     Check if gateway is running")
-		fmt.Println("  restart    Restart gateway daemon")
+		fmt.Println("  start      Start gateway daemon")
 		fmt.Println("  stop       Stop gateway daemon")
+		fmt.Println("  restart    Restart gateway daemon")
+		fmt.Println("  status     Check if gateway is running")
+		fmt.Println("  logs       View gateway logs (live, press Ctrl+C to exit)")
 		os.Exit(1)
 	}
 
 	switch os.Args[2] {
-	case "logs":
-		cmdGatewayLogs()
-	case "status":
-		cmdGatewayStatus()
-	case "restart":
-		cmdGatewayRestart()
+	case "start":
+		cmdGatewayStart()
 	case "stop":
 		cmdGatewayStop()
+	case "restart":
+		cmdGatewayRestart()
+	case "status":
+		cmdGatewayStatus()
+	case "logs":
+		cmdGatewayLogs()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown gw command: %s\n", os.Args[2])
 		os.Exit(1)
@@ -356,6 +360,48 @@ func cmdGatewayStop() {
 
 	os.Remove(pidFile())
 	fmt.Printf("✅ Gateway stopped (was PID: %d)\n", pid)
+}
+
+func cmdGatewayStart() {
+	// Check if already running
+	pid, err := readPID()
+	if err == nil && isProcessRunning(pid) {
+		fmt.Printf("⚠️  Gateway is already running (PID: %d)\n", pid)
+		fmt.Println("Use 'feelpulse gw restart' to restart it.")
+		os.Exit(1)
+	}
+
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error loading config: %v\n", err)
+		fmt.Println("Run 'feelpulse setup' to create a config file.")
+		os.Exit(1)
+	}
+
+	fmt.Println("🚀 Starting gateway daemon...")
+
+	// Start daemon
+	if err := startDaemon(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to start daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait a bit and check if it started
+	time.Sleep(500 * time.Millisecond)
+	pid, err = readPID()
+	if err != nil || !isProcessRunning(pid) {
+		fmt.Fprintln(os.Stderr, "❌ Gateway failed to start. Check logs: feelpulse gw logs")
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Gateway started (PID: %d)\n", pid)
+	fmt.Printf("\n📡 Gateway: http://%s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
+	if cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.BotToken != "" {
+		fmt.Println("📱 Telegram: enabled")
+	}
+	fmt.Println("\n📝 View logs: feelpulse gw logs")
+	fmt.Println("🔍 Check status: feelpulse gw status")
 }
 
 func cmdGatewayRestart() {
