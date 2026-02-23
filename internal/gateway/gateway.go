@@ -146,7 +146,7 @@ func New(cfg *config.Config) *Gateway {
 		
 		toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Load CLI tool documentation before using specialized commands. Returns step-by-step usage guide.",
+			Description: "Load skill documentation for specialized CLI tools. MUST use before GitHub operations (clone, PR, etc). Call this FIRST when you see github.com URLs or need to install packages.",
 			Parameters: []tools.Parameter{
 				{
 					Name:        "name",
@@ -589,7 +589,7 @@ func (gw *Gateway) reloadSkills() error {
 		
 		gw.toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Load CLI tool documentation before using specialized commands. Returns step-by-step usage guide.",
+			Description: "Load skill documentation for specialized CLI tools. MUST use before GitHub operations (clone, PR, etc). Call this FIRST when you see github.com URLs or need to install packages.",
 			Parameters: []tools.Parameter{
 				{
 					Name:        "name",
