@@ -507,6 +507,8 @@ func (c *AnthropicClient) ChatWithTools(
 	var model string
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
+		logger.Debug("🤖 [LLM] Iteration %d/%d starting...", iteration+1, maxIterations)
+		
 		reqBody := AnthropicRequest{
 			Model:     c.model,
 			MaxTokens: defaultMaxTokens,
@@ -515,9 +517,12 @@ func (c *AnthropicClient) ChatWithTools(
 			Tools:     tools,
 			Stream:    true,
 		}
+		
+		logger.Debug("🤖 [LLM] Sending request: %d messages, %d tools", len(anthropicMsgs), len(tools))
 
 		textContent, toolUseBlocks, respModel, usage, stopReason, err := c.callAPIStreamTools(reqBody, callback)
 		if err != nil {
+			logger.Error("❌ [LLM] API call failed: %v", err)
 			return nil, err
 		}
 
@@ -525,10 +530,20 @@ func (c *AnthropicClient) ChatWithTools(
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
 		finalText.WriteString(textContent)
+		
+		logger.Debug("🤖 [LLM] Response received: text_len=%d, tools_requested=%d, stop_reason=%s, tokens_in=%d, tokens_out=%d", 
+			len(textContent), len(toolUseBlocks), stopReason, usage.InputTokens, usage.OutputTokens)
+		
+		if textContent != "" {
+			logger.Debug("🤖 [LLM] Text content: %s", truncateString(textContent, 200))
+		}
 
 		if stopReason != "tool_use" || len(toolUseBlocks) == 0 {
+			logger.Debug("🤖 [LLM] Iteration complete, no more tools needed (stop_reason=%s)", stopReason)
 			break
 		}
+		
+		logger.Debug("🤖 [LLM] Claude wants to use %d tools, continuing to iteration %d", len(toolUseBlocks), iteration+2)
 
 		// Build assistant content blocks for conversation history
 		var assistantContent []ContentBlock
@@ -580,6 +595,9 @@ func (c *AnthropicClient) ChatWithTools(
 				logger.Debug("🔧 [tool] %s → error: %v", toolUse.Name, err)
 			} else {
 				logger.Debug("🔧 [tool] %s → success (%d chars)", toolUse.Name, len(result))
+				if len(result) > 0 {
+					logger.Debug("🔧 [tool] %s result preview: %s", toolUse.Name, truncateString(result, 150))
+				}
 			}
 
 			toolResults = append(toolResults, ContentBlock{
@@ -588,15 +606,25 @@ func (c *AnthropicClient) ChatWithTools(
 				Content:   result,
 			})
 		}
+		
+		logger.Debug("🤖 [LLM] Sending %d tool results back to Claude", len(toolResults))
 
 		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
 			Role:    "user",
 			Content: toolResults,
 		})
 	}
+	
+	finalResponse := finalText.String()
+	logger.Debug("🤖 [LLM] ChatWithTools complete: total_text_len=%d, total_tokens_in=%d, total_tokens_out=%d, model=%s", 
+		len(finalResponse), totalUsage.InputTokens, totalUsage.OutputTokens, model)
+	
+	if len(finalResponse) > 0 {
+		logger.Debug("🤖 [LLM] Final response preview: %s", truncateString(finalResponse, 300))
+	}
 
 	return &types.AgentResponse{
-		Text:  finalText.String(),
+		Text:  finalResponse,
 		Model: model,
 		Usage: totalUsage,
 	}, nil
