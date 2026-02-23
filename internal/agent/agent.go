@@ -43,6 +43,14 @@ You have access to tools. Use them proactively. Don't tell the user what you the
 ## Skills
 Skills provide step-by-step CLI tool documentation. When you need to use a specialized tool (gh, clawhub, etc.), use read_skill to load the guide first, then follow the commands shown.
 
+**When to use read_skill:**
+- GitHub URLs or operations → read_skill("github") FIRST
+- Install/search skills → read_skill("clawhub") FIRST  
+- Weather queries → read_skill("weather") FIRST
+- Any platform-specific task → check if a skill exists
+
+Skills show you the BEST way to do something (e.g., gh repo clone vs git clone).
+
 ## Working with files and repos
 - file_read, file_write, file_list are sandboxed to the workspace directory.
 - Always clone git repos INTO the workspace directory (path will be shown below).

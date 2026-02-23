@@ -69,6 +69,12 @@ type BrowserToolRegistrar interface {
 	RegisterBrowserTools(r *Registry)
 }
 
+// shellQuote quotes a string for safe use as a shell argument
+func shellQuote(s string) string {
+	// Simple quoting: wrap in single quotes and escape any single quotes
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
 // validateExecCommand checks if a command is allowed
 func validateExecCommand(cmdStr string, allowedCommands []string) error {
 	// First check for dangerous patterns (blocked regardless of allowlist)
@@ -125,6 +131,15 @@ func execToolSecure(cfg *ExecConfig) *Tool {
 			cmdStr, ok := params["command"].(string)
 			if !ok || cmdStr == "" {
 				return "", fmt.Errorf("command parameter is required")
+			}
+
+			// Auto-wrap with bash if "bash" is the only allowed command
+			// This allows "git clone", "python3", etc. to work when allowedCommands=["bash"]
+			if len(cfg.AllowedCommands) == 1 && cfg.AllowedCommands[0] == "bash" {
+				if !strings.HasPrefix(strings.TrimSpace(cmdStr), "bash ") {
+					// Wrap the command in bash -c
+					cmdStr = "bash -c " + shellQuote(cmdStr)
+				}
 			}
 
 			// Validate command against security policy
