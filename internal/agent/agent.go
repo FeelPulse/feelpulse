@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/internal/tools"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
@@ -208,20 +209,26 @@ func (r *Router) extractSessionKey(messages []types.Message) string {
 		msg := messages[i]
 		if msg.Channel != "" && msg.Metadata != nil {
 			if userID, ok := msg.Metadata["user_id"]; ok {
+				var sessionKey string
 				switch v := userID.(type) {
 				case string:
-					return fmt.Sprintf("%s:%s", msg.Channel, v)
+					sessionKey = fmt.Sprintf("%s:%s", msg.Channel, v)
 				case int64:
-					return fmt.Sprintf("%s:%d", msg.Channel, v)
+					sessionKey = fmt.Sprintf("%s:%d", msg.Channel, v)
 				case int:
-					return fmt.Sprintf("%s:%d", msg.Channel, v)
+					sessionKey = fmt.Sprintf("%s:%d", msg.Channel, v)
 				case float64:
-					return fmt.Sprintf("%s:%d", msg.Channel, int64(v))
+					sessionKey = fmt.Sprintf("%s:%d", msg.Channel, int64(v))
+				}
+				if sessionKey != "" {
+					logger.Debug("🔑 Extracted session key: %s (from message %d)", sessionKey, i)
+					return sessionKey
 				}
 			}
 		}
 	}
 	
+	logger.Warn("⚠️ No valid session key found in %d messages", len(messages))
 	return "unknown"
 }
 
@@ -238,6 +245,8 @@ func (r *Router) createToolExecutor(sessionKey string) ToolExecutor {
 		defer cancel()
 		
 		ctx = context.WithValue(ctx, "session_key", sessionKey)
+		
+		logger.Debug("🔧 Executing tool '%s' with session key: %s", name, sessionKey)
 
 		return tool.Handler(ctx, input)
 	}

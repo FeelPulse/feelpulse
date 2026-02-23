@@ -87,9 +87,14 @@ func (gw *Gateway) registerSubAgentTools() {
 			parentKey := "unknown"
 			if key, ok := ctx.Value("session_key").(string); ok {
 				parentKey = key
+				gw.log.Debug("🤖 spawn_agent received session key from context: %s", parentKey)
+			} else {
+				gw.log.Warn("⚠️ spawn_agent: no session_key in context, using 'unknown'")
 			}
 
+			gw.log.Debug("🤖 Spawning sub-agent '%s' for session: %s", label, parentKey)
 			agentID := gw.subagentManager.Spawn(task, label, systemPrompt, parentKey, runner, gw.toolRegistry)
+			gw.log.Debug("🤖 Sub-agent spawned: %s (parent: %s)", agentID, parentKey)
 
 			return fmt.Sprintf("✅ Sub-agent spawned!\n\nID: %s\nLabel: %s\nTask: %s\n\nThe agent is now running in the background. You'll be notified when it completes.",
 				agentID, label, truncateForDisplay(task, 100)), nil
@@ -210,6 +215,7 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 // handleSubAgentComplete handles a sub-agent completion
 func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionKey string, duration time.Duration, err error) {
 	gw.log.Info("🤖 Sub-agent '%s' (%s) completed in %s", label, agentID, formatDuration(duration))
+	gw.log.Debug("🤖 Parent session key: %s", parentSessionKey)
 
 	// Format duration for display
 	durationStr := formatDuration(duration)
@@ -218,6 +224,7 @@ func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionK
 	var message string
 	if err != nil {
 		message = fmt.Sprintf("🤖 Sub-agent **%s** failed after %s:\n\n❌ %v", label, durationStr, err)
+		gw.log.Debug("🤖 Sub-agent failed with error: %v", err)
 	} else {
 		// Truncate long results for notification
 		preview := result
@@ -225,11 +232,15 @@ func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionK
 			preview = preview[:497] + "..."
 		}
 		message = fmt.Sprintf("🤖 Sub-agent **%s** completed in %s:\n\n%s", label, durationStr, preview)
+		gw.log.Debug("🤖 Sub-agent result length: %d chars", len(result))
 	}
 
 	// Inject result into parent session
 	if parentSessionKey != "" {
+		gw.log.Debug("🤖 Injecting result to parent session: %s", parentSessionKey)
 		gw.injectSubAgentResult(parentSessionKey, label, result, err)
+	} else {
+		gw.log.Warn("⚠️ No parent session key - result will not be injected")
 	}
 
 	// Send Telegram notification
@@ -238,22 +249,27 @@ func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionK
 
 // injectSubAgentResult adds the sub-agent result to the parent session history
 func (gw *Gateway) injectSubAgentResult(sessionKey, label, result string, err error) {
+	gw.log.Debug("📥 Attempting to inject sub-agent '%s' result into session: %s", label, sessionKey)
+	
 	// Parse session key to get channel and userID
 	parts := parseSessionKey(sessionKey)
 	if len(parts) != 2 {
-		gw.log.Warn("Invalid session key for sub-agent result injection: %s", sessionKey)
+		gw.log.Warn("⚠️ Invalid session key for sub-agent result injection: %s (expected 'channel:userID', got %d parts)", sessionKey, len(parts))
 		return
 	}
 
 	channel := parts[0]
 	userID := parts[1]
+	gw.log.Debug("📥 Parsed session key: channel=%s, userID=%s", channel, userID)
 
 	// Build system message content
 	var content string
 	if err != nil {
 		content = fmt.Sprintf("[Sub-agent \"%s\" failed]\nError: %v", label, err)
+		gw.log.Debug("📥 Sub-agent failed, injecting error message")
 	} else {
 		content = fmt.Sprintf("[Sub-agent \"%s\" completed]\nResult: %s", label, result)
+		gw.log.Debug("📥 Sub-agent succeeded, injecting result (%d chars)", len(result))
 	}
 
 	// Create a system-style message
@@ -271,7 +287,7 @@ func (gw *Gateway) injectSubAgentResult(sessionKey, label, result string, err er
 
 	// Add to session
 	gw.sessions.AddMessageAndPersist(channel, userID, msg)
-	gw.log.Debug("📥 Injected sub-agent result into session %s", sessionKey)
+	gw.log.Info("✅ Sub-agent '%s' result injected into session %s:%s", label, channel, userID)
 }
 
 // sendSubAgentNotification sends a notification via Telegram
