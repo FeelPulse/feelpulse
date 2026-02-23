@@ -36,6 +36,12 @@ func NewSimpleRunner(chatFunc ChatWithToolsFunc, maxIterations int) *SimpleRunne
 
 // RunTask implements AgentRunner
 func (r *SimpleRunner) RunTask(ctx context.Context, task string, systemPrompt string, toolRegistry *tools.Registry) (string, error) {
+	// Extract parent session key from context if available
+	metadata := make(map[string]any)
+	if parentKey, ok := ctx.Value("parent_session_key").(string); ok && parentKey != "" {
+		metadata["session_key"] = parentKey
+	}
+	
 	// Build initial message with the task
 	messages := []types.Message{
 		{
@@ -43,6 +49,7 @@ func (r *SimpleRunner) RunTask(ctx context.Context, task string, systemPrompt st
 			IsBot:     false,
 			Channel:   "subagent",
 			Timestamp: time.Now(),
+			Metadata:  metadata,
 		},
 	}
 

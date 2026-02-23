@@ -191,8 +191,21 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 			}
 		}
 
-		// Create tool executor
-		// TODO: pass parent context for graceful cancellation
+		// Create tool executor with session context
+		// Extract session key from messages if available
+		sessionKey := "unknown"
+		if len(messages) > 0 {
+			for i := len(messages) - 1; i >= 0; i-- {
+				msg := messages[i]
+				if msg.Metadata != nil {
+					if sk, ok := msg.Metadata["session_key"].(string); ok && sk != "" {
+						sessionKey = sk
+						break
+					}
+				}
+			}
+		}
+		
 		executor := func(name string, input map[string]any) (string, error) {
 			if toolRegistry == nil {
 				return "", fmt.Errorf("no tools available")
@@ -203,6 +216,10 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
+			
+			// Inject session key for tools that need it
+			ctx = context.WithValue(ctx, "session_key", sessionKey)
+			
 			return tool.Handler(ctx, input)
 		}
 

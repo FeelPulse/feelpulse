@@ -221,8 +221,11 @@ func (m *Manager) Spawn(
 	// Filter tools: remove spawn_agent to prevent recursive spawning
 	filteredRegistry := filterTools(toolRegistry)
 
+	// Create context with session key for tool execution
+	ctxWithSession := context.WithValue(ctx, "parent_session_key", parentSessionKey)
+
 	// Run the agent in a goroutine
-	go m.runAgent(ctx, agent, runner, filteredRegistry)
+	go m.runAgent(ctxWithSession, agent, runner, filteredRegistry)
 
 	return id
 }
@@ -259,11 +262,19 @@ func (m *Manager) runAgent(ctx context.Context, agent *SubAgent, runner AgentRun
 	systemPrompt := agent.SystemPrompt
 	if systemPrompt == "" {
 		systemPrompt = fmt.Sprintf(`You are a sub-agent working on a specific task.
+
 Your task: %s
 
-Complete this task and provide a clear, concise result.
-Focus only on the task. Do not engage in conversation.
-When done, provide your final answer/result.`, agent.Task)
+## Guidelines
+- Use available tools proactively - check tool list for what's available
+- For specialized operations, look for relevant skills (use read_skill if available)
+- Be concise and focused on the task
+- Provide a clear final result when done
+
+## Tools
+You have access to tools. Use them to complete the task. Tool list will be provided by the system.
+
+Complete the task and provide your final answer.`, agent.Task)
 	}
 
 	// Run the task
