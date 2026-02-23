@@ -116,16 +116,39 @@ func TestCompactor_SplitMessages_KeepAll(t *testing.T) {
 
 func TestCompactor_CreateSummaryMessage(t *testing.T) {
 	summaryText := "This is a conversation summary."
-	msg := CreateSummaryMessage(summaryText)
-
-	if msg.Text != summaryText {
-		t.Errorf("Summary text = %q, want %q", msg.Text, summaryText)
+	details := CompactionDetails{
+		ReadFiles:     []string{"a.txt", "b.txt"},
+		ModifiedFiles: []string{"c.txt"},
 	}
+	msg := CreateSummaryMessage(summaryText, details)
+
+	// Summary should include file lists
+	if !strings.Contains(msg.Text, summaryText) {
+		t.Errorf("Summary text should contain original summary")
+	}
+	if !strings.Contains(msg.Text, "<read-files>") {
+		t.Error("Summary should contain <read-files> section")
+	}
+	if !strings.Contains(msg.Text, "a.txt") {
+		t.Error("Summary should list read files")
+	}
+	if !strings.Contains(msg.Text, "<modified-files>") {
+		t.Error("Summary should contain <modified-files> section")
+	}
+	if !strings.Contains(msg.Text, "c.txt") {
+		t.Error("Summary should list modified files")
+	}
+
 	if !msg.IsBot {
 		t.Error("Summary message should be from bot")
 	}
 	if msg.Metadata["type"] != "summary" {
 		t.Error("Summary message should have type=summary metadata")
+	}
+
+	// Check metadata contains compaction details
+	if msg.Metadata["compactionDetails"] == nil {
+		t.Error("Summary should have compactionDetails in metadata")
 	}
 }
 

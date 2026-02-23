@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -13,6 +14,12 @@ const (
 	// DefaultKeepRecentTokens is the default number of recent tokens to keep intact
 	DefaultKeepRecentTokens = 15000
 )
+
+// CompactionDetails tracks file operations across compactions
+type CompactionDetails struct {
+	ReadFiles     []string `json:"readFiles"`
+	ModifiedFiles []string `json:"modifiedFiles"`
+}
 
 // Summarizer interface for summarizing conversation history
 type Summarizer interface {
@@ -106,14 +113,107 @@ func (c *Compactor) SplitMessages(messages []types.Message) (toSummarize, toKeep
 	return messages[:splitIdx], messages[splitIdx:]
 }
 
+// ExtractFileOpsFromMessages extracts file operations from message metadata
+// and previous compaction details (cumulative tracking)
+func ExtractFileOpsFromMessages(messages []types.Message) CompactionDetails {
+	readSet := make(map[string]bool)
+	modifiedSet := make(map[string]bool)
+
+	for _, msg := range messages {
+		// Check if this is a previous summary with compaction details
+		if msg.Metadata != nil {
+			if msg.Metadata["type"] == "summary" {
+				// Extract from previous compaction
+				if details, ok := msg.Metadata["compactionDetails"].(map[string]any); ok {
+					if readFiles, ok := details["readFiles"].([]any); ok {
+						for _, f := range readFiles {
+							if path, ok := f.(string); ok {
+								readSet[path] = true
+							}
+						}
+					}
+					if modFiles, ok := details["modifiedFiles"].([]any); ok {
+						for _, f := range modFiles {
+							if path, ok := f.(string); ok {
+								modifiedSet[path] = true
+							}
+						}
+					}
+				}
+			}
+
+			// Extract from tool call metadata (if present)
+			if toolName, ok := msg.Metadata["tool"].(string); ok {
+				if path, ok := msg.Metadata["path"].(string); ok {
+					switch toolName {
+					case "file_read", "file_list":
+						readSet[path] = true
+					case "file_write":
+						modifiedSet[path] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Convert sets to sorted slices
+	readFiles := make([]string, 0, len(readSet))
+	for f := range readSet {
+		readFiles = append(readFiles, f)
+	}
+
+	modifiedFiles := make([]string, 0, len(modifiedSet))
+	for f := range modifiedSet {
+		modifiedFiles = append(modifiedFiles, f)
+	}
+
+	return CompactionDetails{
+		ReadFiles:     readFiles,
+		ModifiedFiles: modifiedFiles,
+	}
+}
+
+// AppendFileListsToSummary appends file lists to summary in structured format
+func AppendFileListsToSummary(summary string, details CompactionDetails) string {
+	var sb strings.Builder
+	sb.WriteString(summary)
+
+	if len(details.ReadFiles) > 0 {
+		sb.WriteString("\n\n<read-files>\n")
+		for _, f := range details.ReadFiles {
+			sb.WriteString(f)
+			sb.WriteString("\n")
+		}
+		sb.WriteString("</read-files>")
+	}
+
+	if len(details.ModifiedFiles) > 0 {
+		sb.WriteString("\n\n<modified-files>\n")
+		for _, f := range details.ModifiedFiles {
+			sb.WriteString(f)
+			sb.WriteString("\n")
+		}
+		sb.WriteString("</modified-files>")
+	}
+
+	return sb.String()
+}
+
 // CreateSummaryMessage creates a system message containing the summary
-func CreateSummaryMessage(summary string) types.Message {
+func CreateSummaryMessage(summary string, details CompactionDetails) types.Message {
+	// Append file lists to summary text
+	summaryWithFiles := AppendFileListsToSummary(summary, details)
+
 	return types.Message{
-		Text:      summary,
+		Text:      summaryWithFiles,
 		IsBot:     true,
 		Timestamp: time.Now(),
 		Metadata: map[string]any{
 			"type": "summary",
+			"compactionDetails": map[string]any{
+				"readFiles":     details.ReadFiles,
+				"modifiedFiles": details.ModifiedFiles,
+			},
 		},
 	}
 }
@@ -136,6 +236,10 @@ func (c *Compactor) ForceCompact(messages []types.Message) ([]types.Message, err
 		return messages, nil
 	}
 
+	// Extract file operations from messages being summarized
+	// This accumulates file tracking from previous compactions
+	fileOps := ExtractFileOpsFromMessages(toSummarize)
+
 	// Get summary from the summarizer
 	summary, err := c.summarizer.Summarize(toSummarize)
 	if err != nil {
@@ -145,7 +249,7 @@ func (c *Compactor) ForceCompact(messages []types.Message) ([]types.Message, err
 
 	// Build new history: summary message + recent messages
 	result := make([]types.Message, 0, 1+len(toKeep))
-	result = append(result, CreateSummaryMessage(summary))
+	result = append(result, CreateSummaryMessage(summary, fileOps))
 	result = append(result, toKeep...)
 
 	return result, nil
