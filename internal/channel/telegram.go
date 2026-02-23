@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -26,6 +26,7 @@ type TelegramBot struct {
 	baseURL string
 	client  *http.Client
 	offset  int64
+	log     *logger.Logger
 
 	handler         func(msg *types.Message) (*types.Message, error)
 	callbackHandler func(chatID int64, userID int64, action, value string) (string, *InlineKeyboard, error)
@@ -102,13 +103,17 @@ type TelegramResponse struct {
 }
 
 // NewTelegramBot creates a new Telegram bot instance
-func NewTelegramBot(token string) *TelegramBot {
+func NewTelegramBot(token string, log *logger.Logger) *TelegramBot {
+	if log == nil {
+		log = logger.GetDefaultLogger()
+	}
 	return &TelegramBot{
 		token:   token,
 		baseURL: "https://api.telegram.org/bot" + token,
 		client: &http.Client{
 			Timeout: 60 * time.Second, // Long polling timeout
 		},
+		log: log.WithComponent("telegram"),
 	}
 }
 
@@ -156,7 +161,7 @@ func (t *TelegramBot) Start(ctx context.Context) error {
 	ctx, t.cancel = context.WithCancel(ctx)
 	t.mu.Unlock()
 
-	log.Printf("📱 Telegram bot starting...")
+	t.log.Info("📱 Telegram bot starting...")
 
 	// Test connection by getting bot info
 	me, err := t.GetMe()
@@ -166,13 +171,13 @@ func (t *TelegramBot) Start(ctx context.Context) error {
 		t.mu.Unlock()
 		return fmt.Errorf("failed to connect to Telegram: %w", err)
 	}
-	log.Printf("📱 Telegram bot connected: @%s", me.Username)
+	t.log.Info("📱 Telegram bot connected: @%s", me.Username)
 
 	// Register bot commands menu
 	if err := t.SetMyCommands(); err != nil {
-		log.Printf("⚠️ Failed to set bot commands: %v", err)
+		t.log.Warn("⚠️ Failed to set bot commands: %v", err)
 	} else {
-		log.Printf("📋 Bot commands menu registered")
+		t.log.Info("📋 Bot commands menu registered")
 	}
 
 	// Start polling loop
@@ -212,11 +217,11 @@ func (t *TelegramBot) pollLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("📱 Telegram bot stopped")
+			t.log.Info("📱 Telegram bot stopped")
 			return
 		default:
 			if err := t.poll(ctx); err != nil {
-				log.Printf("❌ Telegram poll error: %v", err)
+				t.log.Error("❌ Telegram poll error: %v", err)
 				time.Sleep(5 * time.Second) // Back off on error
 			}
 		}
@@ -280,7 +285,7 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	// Check allowlist before processing
 	if !t.IsUserAllowed(username) {
-		log.Printf("⛔ Blocked message from unauthorized user: %s", username)
+		t.log.Warn("⛔ Blocked message from unauthorized user: %s", username)
 		_ = t.SendMessage(tgMsg.Chat.ID, "⛔ You are not authorized to use this bot.", false)
 		return
 	}
@@ -305,7 +310,7 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 		msg.Metadata["user_id"] = tgMsg.From.ID
 	}
 
-	log.Printf("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
+	t.log.Debug("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
 
 	// Keep typing indicator alive during processing
 	stopTyping := make(chan struct{})
@@ -328,7 +333,7 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 	close(stopTyping)
 
 	if err != nil {
-		log.Printf("❌ Handler error: %v", err)
+		t.log.Error("❌ Handler error: %v", err)
 		return
 	}
 
@@ -351,7 +356,7 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 
 	// Check allowlist before processing
 	if !t.IsUserAllowed(username) {
-		log.Printf("⛔ Blocked photo from unauthorized user: %s", username)
+		t.log.Warn("⛔ Blocked photo from unauthorized user: %s", username)
 		_ = t.SendMessage(tgMsg.Chat.ID, "⛔ You are not authorized to use this bot.", false)
 		return
 	}
@@ -364,7 +369,7 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 
 	// Check file size (max 5MB for safety)
 	if photo.FileSize > 5*1024*1024 {
-		log.Printf("⚠️ Photo too large: %d bytes", photo.FileSize)
+		t.log.Warn("⚠️ Photo too large: %d bytes", photo.FileSize)
 		_ = t.SendMessage(tgMsg.Chat.ID, "⚠️ Photo is too large. Please send a smaller image (max 5MB).", false)
 		return
 	}
@@ -372,7 +377,7 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 	// Get file info
 	fileInfo, err := t.GetFile(photo.FileID)
 	if err != nil {
-		log.Printf("❌ Failed to get file info: %v", err)
+		t.log.Error("❌ Failed to get file info: %v", err)
 		_ = t.SendMessage(tgMsg.Chat.ID, "❌ Failed to process photo.", false)
 		return
 	}
@@ -380,7 +385,7 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 	// Download the file
 	imageData, err := t.DownloadFile(fileInfo.FilePath)
 	if err != nil {
-		log.Printf("❌ Failed to download photo: %v", err)
+		t.log.Error("❌ Failed to download photo: %v", err)
 		_ = t.SendMessage(tgMsg.Chat.ID, "❌ Failed to download photo.", false)
 		return
 	}
@@ -427,7 +432,7 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 		msg.Metadata["user_id"] = tgMsg.From.ID
 	}
 
-	log.Printf("📷 [%s] %s: [Photo] %s", msg.Channel, msg.From, text)
+	t.log.Debug("📷 [%s] %s: [Photo] %s", msg.Channel, msg.From, text)
 
 	// Keep typing indicator alive during processing
 	stopTyping := make(chan struct{})
@@ -450,7 +455,7 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 	close(stopTyping)
 	
 	if err != nil {
-		log.Printf("❌ Handler error: %v", err)
+		t.log.Error("❌ Handler error: %v", err)
 		return
 	}
 
@@ -472,7 +477,7 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 			}
 			content := []byte(reply.Text)
 			if err := t.SendDocument(chatID, filename, content, "📤 Conversation export"); err != nil {
-				log.Printf("❌ Failed to send export file: %v", err)
+				t.log.Error("❌ Failed to send export file: %v", err)
 				_ = t.SendMessage(chatID, "❌ Failed to export conversation.", false)
 			}
 			return
@@ -488,16 +493,16 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 					parts := SplitLongMessage(msg, SafeMessageLength)
 					for _, part := range parts {
 						if err := t.SendMessage(chatID, part, true); err != nil {
-							log.Printf("❌ Failed to send reply: %v", err)
+							t.log.Error("❌ Failed to send reply: %v", err)
 						}
 					}
 				}
 			}
 			// Then send screenshot as photo
 			if err := t.SendPhoto(chatID, screenshotPath, caption); err != nil {
-				log.Printf("⚠️ Failed to send screenshot: %v (continuing without photo)", err)
+				t.log.Warn("⚠️ Failed to send screenshot: %v (continuing without photo)", err)
 			} else {
-				log.Printf("📸 Screenshot sent: %s", screenshotPath)
+				t.log.Debug("📸 Screenshot sent: %s", screenshotPath)
 			}
 			return
 		}
@@ -515,11 +520,11 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 					// Attach keyboard to the very last part of the very last message
 					if isLast && partIdx == len(parts)-1 {
 						if err := t.SendMessageWithKeyboard(chatID, part, keyboard, true); err != nil {
-							log.Printf("❌ Failed to send reply with keyboard: %v", err)
+							t.log.Error("❌ Failed to send reply with keyboard: %v", err)
 						}
 					} else {
 						if err := t.SendMessage(chatID, part, true); err != nil {
-							log.Printf("❌ Failed to send reply part: %v", err)
+							t.log.Error("❌ Failed to send reply part: %v", err)
 						}
 					}
 				}
@@ -535,7 +540,7 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 		parts := SplitLongMessage(msg, SafeMessageLength)
 		for _, part := range parts {
 			if err := t.SendMessage(chatID, part, true); err != nil {
-				log.Printf("❌ Failed to send reply: %v", err)
+				t.log.Error("❌ Failed to send reply: %v", err)
 			}
 		}
 	}
@@ -837,11 +842,11 @@ func (t *TelegramBot) handleCallbackQuery(ctx context.Context, query *CallbackQu
 	}
 
 	action, value := ParseCallbackData(query.Data)
-	log.Printf("📲 Callback: action=%s value=%s from=%d", action, value, userID)
+	t.log.Debug("📲 Callback: action=%s value=%s from=%d", action, value, userID)
 
 	text, keyboard, err := t.callbackHandler(chatID, userID, action, value)
 	if err != nil {
-		log.Printf("❌ Callback handler error: %v", err)
+		t.log.Error("❌ Callback handler error: %v", err)
 		_ = t.AnswerCallbackQuery(query.ID, "Error processing request")
 		return
 	}
@@ -852,7 +857,7 @@ func (t *TelegramBot) handleCallbackQuery(ctx context.Context, query *CallbackQu
 	// If handler returned text, edit the original message
 	if text != "" && query.Message != nil {
 		if err := t.EditMessageText(chatID, query.Message.MessageID, text, keyboard); err != nil {
-			log.Printf("⚠️ Failed to edit message: %v", err)
+			t.log.Warn("⚠️ Failed to edit message: %v", err)
 			// Fallback to sending a new message
 			if keyboard != nil {
 				_ = t.SendMessageWithKeyboard(chatID, text, *keyboard, true)

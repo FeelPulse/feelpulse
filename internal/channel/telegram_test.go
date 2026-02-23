@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewTelegramBot(t *testing.T) {
-	bot := NewTelegramBot("test-token")
+	bot := NewTelegramBot("test-token", nil)
 	if bot == nil {
 		t.Fatal("NewTelegramBot returned nil")
 	}
@@ -15,7 +15,7 @@ func TestNewTelegramBot(t *testing.T) {
 }
 
 func TestTelegramBotBaseURL(t *testing.T) {
-	bot := NewTelegramBot("123:ABC")
+	bot := NewTelegramBot("123:ABC", nil)
 	expected := "https://api.telegram.org/bot123:ABC"
 	if bot.baseURL != expected {
 		t.Errorf("Expected baseURL %s, got %s", expected, bot.baseURL)
@@ -24,7 +24,7 @@ func TestTelegramBotBaseURL(t *testing.T) {
 
 func TestSendTypingActionParams(t *testing.T) {
 	// Test that sendChatAction params are formatted correctly
-	bot := NewTelegramBot("test-token")
+	bot := NewTelegramBot("test-token", nil)
 	
 	// Verify the bot has the method
 	// This is a compile-time check - if SendTypingAction doesn't exist, this won't compile
@@ -84,7 +84,7 @@ func TestIsUserAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bot := NewTelegramBot("test-token")
+			bot := NewTelegramBot("test-token", nil)
 			bot.SetAllowedUsers(tt.allowedUsers)
 
 			result := bot.IsUserAllowed(tt.username)
@@ -97,7 +97,7 @@ func TestIsUserAllowed(t *testing.T) {
 }
 
 func TestSetAllowedUsers(t *testing.T) {
-	bot := NewTelegramBot("test-token")
+	bot := NewTelegramBot("test-token", nil)
 	
 	// Initially no allowlist
 	if !bot.IsUserAllowed("anyone") {

@@ -396,7 +396,7 @@ func (gw *Gateway) initializeTelegram(ctx context.Context) {
 		return
 	}
 
-	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken)
+	telegram := channel.NewTelegramBot(gw.cfg.Channels.Telegram.BotToken, gw.log)
 	telegram.SetHandler(gw.handleMessage)
 	telegram.SetCallbackHandler(gw.handleTelegramCallback)
 	telegram.SetAllowedUsers(gw.cfg.Channels.Telegram.AllowedUsers)
