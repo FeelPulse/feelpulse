@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -217,21 +216,9 @@ func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionK
 	gw.log.Info("🤖 Sub-agent '%s' (%s) completed in %s", label, agentID, formatDuration(duration))
 	gw.log.Debug("🤖 Parent session key: %s", parentSessionKey)
 
-	// Format duration for display
-	durationStr := formatDuration(duration)
-
-	// Build result message
-	var message string
 	if err != nil {
-		message = fmt.Sprintf("🤖 Sub-agent **%s** failed after %s:\n\n❌ %v", label, durationStr, err)
 		gw.log.Debug("🤖 Sub-agent failed with error: %v", err)
 	} else {
-		// Truncate long results for notification
-		preview := result
-		if len(preview) > 500 {
-			preview = preview[:497] + "..."
-		}
-		message = fmt.Sprintf("🤖 Sub-agent **%s** completed in %s:\n\n%s", label, durationStr, preview)
 		gw.log.Debug("🤖 Sub-agent result length: %d chars", len(result))
 	}
 
@@ -243,8 +230,8 @@ func (gw *Gateway) handleSubAgentComplete(agentID, label, result, parentSessionK
 		gw.log.Warn("⚠️ No parent session key - result will not be injected")
 	}
 
-	// Send Telegram notification
-	gw.sendSubAgentNotification(parentSessionKey, message)
+	// Result is injected into session history - bot will see it on next user message
+	// No proactive notification sent to avoid interrupting user
 }
 
 // injectSubAgentResult adds the sub-agent result to the parent session history
@@ -288,35 +275,6 @@ func (gw *Gateway) injectSubAgentResult(sessionKey, label, result string, err er
 	// Add to session
 	gw.sessions.AddMessageAndPersist(channel, userID, msg)
 	gw.log.Info("✅ Sub-agent '%s' result injected into session %s:%s", label, channel, userID)
-}
-
-// sendSubAgentNotification sends a notification via Telegram
-func (gw *Gateway) sendSubAgentNotification(sessionKey, message string) {
-	parts := parseSessionKey(sessionKey)
-	if len(parts) != 2 {
-		return
-	}
-
-	channel := parts[0]
-	if channel != "telegram" {
-		return
-	}
-
-	userID, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		gw.log.Warn("Invalid user ID in session key: %s", parts[1])
-		return
-	}
-
-	gw.mu.RLock()
-	telegram := gw.telegram
-	gw.mu.RUnlock()
-
-	if telegram != nil {
-		if err := telegram.SendMessage(userID, message, true); err != nil {
-			gw.log.Warn("Failed to send sub-agent notification: %v", err)
-		}
-	}
 }
 
 // parseSessionKey splits "channel:userID" into parts
