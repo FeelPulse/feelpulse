@@ -23,9 +23,10 @@ type AgentRequest struct {
 
 // AgentResponse is received from the AI model
 type AgentResponse struct {
-	Text  string `json:"text"`
-	Model string `json:"model"`
-	Usage Usage  `json:"usage"`
+	Text       string   `json:"text"`
+	TextBlocks []string `json:"textBlocks,omitempty"` // individual text blocks from each agentic iteration
+	Model      string   `json:"model"`
+	Usage      Usage    `json:"usage"`
 }
 
 // Usage tracks token consumption

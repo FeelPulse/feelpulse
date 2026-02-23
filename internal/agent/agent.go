@@ -176,15 +176,19 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 	channel := messages[len(messages)-1].Channel
 
 	// Create response message
+	meta := map[string]any{
+		"model":         resp.Model,
+		"input_tokens":  resp.Usage.InputTokens,
+		"output_tokens": resp.Usage.OutputTokens,
+	}
+	if len(resp.TextBlocks) > 1 {
+		meta["text_blocks"] = resp.TextBlocks
+	}
 	reply := &types.Message{
-		Text:    resp.Text,
-		Channel: channel,
-		IsBot:   true,
-		Metadata: map[string]any{
-			"model":         resp.Model,
-			"input_tokens":  resp.Usage.InputTokens,
-			"output_tokens": resp.Usage.OutputTokens,
-		},
+		Text:     resp.Text,
+		Channel:  channel,
+		IsBot:    true,
+		Metadata: meta,
 	}
 
 	return reply, nil

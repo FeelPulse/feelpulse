@@ -468,6 +468,21 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 // Uses typing indicator while waiting, then sends/edits a real message once content arrives.
 // sendReply sends a reply message handling special cases (export, keyboard)
 func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
+	// If the response has multiple text blocks (from agentic loop iterations), send each separately
+	if reply.Metadata != nil {
+		if blocks, ok := reply.Metadata["text_blocks"].([]string); ok && len(blocks) > 1 {
+			for _, block := range blocks {
+				parts := SplitLongMessage(block, SafeMessageLength)
+				for _, part := range parts {
+					if err := t.SendMessage(chatID, part, true); err != nil {
+						t.log.Error("❌ Failed to send text block: %v", err)
+					}
+				}
+			}
+			return
+		}
+	}
+
 	// Check if this is an export response (should send as file)
 	if reply.Metadata != nil {
 		if export, ok := reply.Metadata["export"].(bool); ok && export {

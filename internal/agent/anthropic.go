@@ -503,12 +503,12 @@ func (c *AnthropicClient) ChatWithTools(
 
 
 	var totalUsage types.Usage
-	var finalText strings.Builder
+	var textBlocks []string
 	var model string
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		logger.Debug("🤖 [LLM] Iteration %d/%d starting...", iteration+1, maxIterations)
-		
+
 		reqBody := AnthropicRequest{
 			Model:     c.model,
 			MaxTokens: defaultMaxTokens,
@@ -517,7 +517,7 @@ func (c *AnthropicClient) ChatWithTools(
 			Tools:     tools,
 			Stream:    true,
 		}
-		
+
 		logger.Debug("🤖 [LLM] Sending request: %d messages, %d tools", len(anthropicMsgs), len(tools))
 
 		textContent, toolUseBlocks, respModel, usage, stopReason, err := c.callAPIStreamTools(reqBody, callback)
@@ -529,7 +529,9 @@ func (c *AnthropicClient) ChatWithTools(
 		model = respModel
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
-		finalText.WriteString(textContent)
+		if textContent != "" {
+			textBlocks = append(textBlocks, textContent)
+		}
 		
 		logger.Debug("🤖 [LLM] Response received: text_len=%d, tools_requested=%d, stop_reason=%s, tokens_in=%d, tokens_out=%d", 
 			len(textContent), len(toolUseBlocks), stopReason, usage.InputTokens, usage.OutputTokens)
@@ -615,18 +617,19 @@ func (c *AnthropicClient) ChatWithTools(
 		})
 	}
 	
-	finalResponse := finalText.String()
-	logger.Debug("🤖 [LLM] ChatWithTools complete: total_text_len=%d, total_tokens_in=%d, total_tokens_out=%d, model=%s", 
-		len(finalResponse), totalUsage.InputTokens, totalUsage.OutputTokens, model)
-	
+	finalResponse := strings.Join(textBlocks, "\n\n")
+	logger.Debug("🤖 [LLM] ChatWithTools complete: total_text_len=%d, blocks=%d, total_tokens_in=%d, total_tokens_out=%d, model=%s",
+		len(finalResponse), len(textBlocks), totalUsage.InputTokens, totalUsage.OutputTokens, model)
+
 	if len(finalResponse) > 0 {
 		logger.Debug("🤖 [LLM] Final response preview: %s", truncateString(finalResponse, 300))
 	}
 
 	return &types.AgentResponse{
-		Text:  finalResponse,
-		Model: model,
-		Usage: totalUsage,
+		Text:       finalResponse,
+		TextBlocks: textBlocks,
+		Model:      model,
+		Usage:      totalUsage,
 	}, nil
 }
 
