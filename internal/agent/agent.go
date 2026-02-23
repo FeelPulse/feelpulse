@@ -134,14 +134,17 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 		systemPrompt = r.promptBuilder(systemPrompt)
 	}
 
+	// Extract session key from messages (channel:userID)
+	sessionKey := r.extractSessionKey(messages)
+
 	// Check if we have tools and an Anthropic client - use agentic loop
 	anthropicClient, isAnthropic := r.agent.(*AnthropicClient)
 	if isAnthropic && r.toolRegistry != nil && len(r.toolRegistry.List()) > 0 {
 		// Build Anthropic tool definitions
 		anthropicTools := r.buildAnthropicTools()
 
-		// Create tool executor
-		executor := r.createToolExecutor()
+		// Create tool executor with session context
+		executor := r.createToolExecutor(sessionKey)
 
 		// Use agentic loop with tools
 		resp, err = anthropicClient.ChatWithTools(messages, systemPrompt, anthropicTools, executor, 10, callback)
@@ -194,18 +197,47 @@ func (r *Router) buildAnthropicTools() []AnthropicTool {
 	return anthropicTools
 }
 
+// extractSessionKey extracts session key (channel:userID) from messages
+func (r *Router) extractSessionKey(messages []types.Message) string {
+	if len(messages) == 0 {
+		return "unknown"
+	}
+	
+	// Get last message with user ID
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Channel != "" && msg.Metadata != nil {
+			if userID, ok := msg.Metadata["user_id"]; ok {
+				switch v := userID.(type) {
+				case string:
+					return fmt.Sprintf("%s:%s", msg.Channel, v)
+				case int64:
+					return fmt.Sprintf("%s:%d", msg.Channel, v)
+				case int:
+					return fmt.Sprintf("%s:%d", msg.Channel, v)
+				case float64:
+					return fmt.Sprintf("%s:%d", msg.Channel, int64(v))
+				}
+			}
+		}
+	}
+	
+	return "unknown"
+}
+
 // createToolExecutor creates a function that executes tools from the registry
-func (r *Router) createToolExecutor() ToolExecutor {
+func (r *Router) createToolExecutor(sessionKey string) ToolExecutor {
 	return func(name string, input map[string]any) (string, error) {
 		tool := r.toolRegistry.Get(name)
 		if tool == nil {
 			return "", fmt.Errorf("unknown tool: %s", name)
 		}
 
-		// TODO: pass parent context for graceful cancellation
-		// Execute with a timeout context (60 seconds)
+		// Create context with session key for sub-agent tools
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
+		
+		ctx = context.WithValue(ctx, "session_key", sessionKey)
 
 		return tool.Handler(ctx, input)
 	}
