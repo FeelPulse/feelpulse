@@ -185,18 +185,19 @@ func (r *Registry) BuildSkillListPrompt() string {
 		return ""
 	}
 
-	prompt := "\n\n## Available Skills from ClaWHub\n\n"
-	prompt += "Use read_skill to load documentation when you need specialized tools.\n"
-	prompt += "If a skill is not installed, I'll ask the user for permission to install it.\n\n"
-	prompt += "Available skills:\n\n"
+	prompt := fmt.Sprintf(`
 
-	for _, skill := range r.Items {
-		summary := skill.Summary
-		if summary == "" {
-			summary = "(no description)"
-		}
-		prompt += fmt.Sprintf("- **%s**: %s\n", skill.Slug, summary)
-	}
+## Available Skills from ClaWHub
+
+%d+ specialized CLI tools available via read_skill.
+Examples: github, docker, weather, postgres, k8s, aws, terraform, redis, etc.
+
+**When to use read_skill:**
+- Platform-specific operations (GitHub, AWS, Docker, etc.) → read_skill FIRST
+- Before using any specialized CLI tool → check if a skill exists
+- If skill not installed → I'll ask user for permission to install
+
+Skills provide step-by-step commands and best practices.`, len(r.Items))
 
 	return prompt
 }

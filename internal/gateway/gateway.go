@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -148,24 +147,14 @@ func New(cfg *config.Config) *Gateway {
 
 	// Register read_skill tool (uses skill registry from ClaWHub)
 	if allSkills := skillReg.GetAll(); len(allSkills) > 0 {
-		// Build skill descriptions for tool schema
-		var skillDescs []string
-		for _, s := range allSkills {
-			desc := s.Summary
-			if desc == "" {
-				desc = "no description"
-			}
-			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Slug, desc))
-		}
-		
 		toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Load skill documentation for specialized CLI tools. Call this FIRST when you see platform URLs (GitHub, etc) or need specialized commands. If skill is not installed locally, ask user for permission to install it via clawhub.",
+			Description: fmt.Sprintf("Load skill documentation for specialized CLI tools (%d+ available from ClaWHub). MUST call this FIRST when you see platform-specific operations (GitHub URLs, Docker commands, cloud services, databases, etc). If skill is not installed locally, you can install it via clawhub.", len(allSkills)),
 			Parameters: []tools.Parameter{
 				{
 					Name:        "name",
 					Type:        "string",
-					Description: "Skill slug to load. Available from ClaWHub: " + strings.Join(skillDescs, "; "),
+					Description: "Skill slug to load (examples: github, docker, weather, postgres, k8s, aws, terraform). Check ClaWHub registry for full list.",
 					Required:    true,
 				},
 			},
@@ -624,24 +613,14 @@ func (gw *Gateway) reloadSkills() error {
 	// Re-register read_skill tool with updated skill list
 	allSkills := gw.skillRegistry.GetAll()
 	if len(allSkills) > 0 {
-		// Build skill descriptions for tool schema
-		var skillDescs []string
-		for _, s := range allSkills {
-			desc := s.Summary
-			if desc == "" {
-				desc = "no description"
-			}
-			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Slug, desc))
-		}
-		
 		gw.toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Load skill documentation for specialized CLI tools. Call this FIRST when you see platform URLs (GitHub, etc) or need specialized commands. If skill is not installed locally, ask user for permission to install it via clawhub.",
+			Description: fmt.Sprintf("Load skill documentation for specialized CLI tools (%d+ available from ClaWHub). MUST call this FIRST when you see platform-specific operations (GitHub URLs, Docker commands, cloud services, databases, etc). If skill is not installed locally, you can install it via clawhub.", len(allSkills)),
 			Parameters: []tools.Parameter{
 				{
 					Name:        "name",
 					Type:        "string",
-					Description: "Skill slug to load. Available from ClaWHub: " + strings.Join(skillDescs, "; "),
+					Description: "Skill slug to load (examples: github, docker, weather, postgres, k8s, aws, terraform). Check ClaWHub registry for full list.",
 					Required:    true,
 				},
 			},
