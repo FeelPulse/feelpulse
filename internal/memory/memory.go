@@ -202,16 +202,16 @@ func DefaultWorkspacePath() string {
 	return filepath.Join(home, ".feelpulse", "workspace")
 }
 
-// Reborn resets the workspace to initial state by recreating BOOTSTRAP.md
-// and removing IDENTITY.md. Returns the path to the created BOOTSTRAP.md.
-// Reset clears all memory and session state
-// Removes: IDENTITY.md, MEMORY.md, memory/ directory
+// Reset clears all memory and session state (reverses setup)
+// Removes: IDENTITY.md, MEMORY.md, memory/ directory, skills/ directory
 // Keeps: AGENTS.md, SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md (user config)
 // Does NOT create BOOTSTRAP.md (next start will auto-create it via Load())
+// Skills will be re-extracted on next start
 func (m *Manager) Reset() error {
 	identityPath := filepath.Join(m.path, identityFile)
 	memoryPath := filepath.Join(m.path, memoryFile)
 	memoryDir := filepath.Join(m.path, "memory")
+	skillsDir := filepath.Join(m.path, "skills")
 
 	// Remove IDENTITY.md
 	_ = os.Remove(identityPath)
@@ -221,6 +221,9 @@ func (m *Manager) Reset() error {
 
 	// Remove memory/ directory (daily logs)
 	_ = os.RemoveAll(memoryDir)
+
+	// Remove skills/ directory (will be re-extracted on next start)
+	_ = os.RemoveAll(skillsDir)
 
 	return nil
 }
