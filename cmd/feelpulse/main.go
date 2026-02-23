@@ -52,7 +52,7 @@ Usage:
 Commands:
   setup          Initial setup (creates config, starts gateway daemon)
   gw             Gateway management
-    logs         View gateway logs
+    logs         View gateway logs (live, Ctrl+C to exit)
     status       Check gateway status
     restart      Restart gateway
     stop         Stop gateway
@@ -65,7 +65,7 @@ func cmdGateway() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: feelpulse gw <command>")
 		fmt.Println("\nCommands:")
-		fmt.Println("  logs       View gateway logs")
+		fmt.Println("  logs       View gateway logs (live, press Ctrl+C to exit)")
 		fmt.Println("  status     Check if gateway is running")
 		fmt.Println("  restart    Restart gateway daemon")
 		fmt.Println("  stop       Stop gateway daemon")
@@ -246,12 +246,11 @@ func startDaemon(cfg *config.Config) error {
 		return err
 	}
 
-	// Prepare log file
+	// Prepare log file (do NOT defer close - daemon needs it)
 	logF, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
 	}
-	defer logF.Close()
 
 	// Start detached process
 	cmd := exec.Command(exe, "_internal_gateway_start")
@@ -262,8 +261,12 @@ func startDaemon(cfg *config.Config) error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		logF.Close()
 		return err
 	}
+
+	// Don't close logF - daemon process inherits the file descriptor
+	// and continues writing to it
 
 	// Write PID file
 	return os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0644)
@@ -277,27 +280,12 @@ func cmdGatewayLogs() {
 		return
 	}
 
-	// Check for -f flag (follow)
-	follow := false
-	for _, arg := range os.Args[3:] {
-		if arg == "-f" || arg == "--follow" {
-			follow = true
-		}
-	}
-
-	if follow {
-		// Use tail -f
-		cmd := exec.Command("tail", "-f", logPath)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Run()
-	} else {
-		// Show last 100 lines
-		cmd := exec.Command("tail", "-n", "100", logPath)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Run()
-	}
+	// Default: follow mode (tail -f)
+	// Use tail -f to continuously output logs
+	cmd := exec.Command("tail", "-f", logPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
 }
 
 func cmdGatewayStatus() {
