@@ -1,14 +1,10 @@
-.PHONY: build install clean test run start stop restart logs status tui fmt vet lint deps dev check help install-service uninstall-service docker-build docker-run docker-stop docker-push bench test-integration
+.PHONY: build install clean test run setup start stop restart logs status reset fmt vet lint deps dev check help docker-build docker-run docker-stop docker-push bench test-integration
 
 # Binary name
 BINARY=fp
 
 # Build directory
 BUILD_DIR=./build
-
-# PID file for background process
-PID_FILE=/tmp/feelpulse.pid
-LOG_FILE=/tmp/feelpulse.log
 
 # Go parameters
 GOCMD=go
@@ -34,7 +30,7 @@ all: build
 
 ## Build & Install
 
-build: ## Build binary to ./build/feelpulse
+build: ## Build binary to ./build/fp
 	@echo "🔨 Building $(BINARY) $(VERSION)..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY) $(MAIN_PKG)
@@ -45,59 +41,39 @@ install: build ## Install binary to GOPATH/bin
 	$(GOINSTALL) $(LDFLAGS) $(MAIN_PKG)
 	@echo "✅ Installed to $(shell go env GOPATH)/bin/$(BINARY)"
 
-## Run
+## Gateway Management (uses built binary)
 
-start: build ## Build and start gateway in foreground
-	@echo "🫀 Starting FeelPulse..."
+setup: build ## Run initial setup (creates config, starts daemon)
+	@echo "⚙️  Running setup..."
+	$(BUILD_DIR)/$(BINARY) setup
+
+start: build ## Start gateway daemon
+	@echo "🫀 Starting gateway..."
 	$(BUILD_DIR)/$(BINARY) start
 
-start-bg: build ## Build and start gateway in background (logs → /tmp/feelpulse.log)
-	@echo "🫀 Starting FeelPulse in background..."
-	@$(BUILD_DIR)/$(BINARY) start > $(LOG_FILE) 2>&1 & echo $$! > $(PID_FILE)
-	@echo "✅ Started (PID $$(cat $(PID_FILE)))"
-	@echo "📋 Logs: tail -f $(LOG_FILE)"
+stop: build ## Stop gateway daemon
+	@echo "🛑 Stopping gateway..."
+	$(BUILD_DIR)/$(BINARY) stop
 
-stop: ## Stop background gateway
-	@if [ -f $(PID_FILE) ]; then \
-		PID=$$(cat $(PID_FILE)); \
-		echo "🛑 Stopping FeelPulse (PID $$PID)..."; \
-		kill $$PID 2>/dev/null && rm -f $(PID_FILE) && echo "✅ Stopped"; \
-	else \
-		echo "⚠️  No PID file found (not running in background?)"; \
-	fi
-
-restart: stop start-bg ## Restart background gateway
-
-## systemd service
-
-install-service: build ## Install and enable systemd service (user mode)
-	@echo "📦 Installing systemd service..."
-	$(BUILD_DIR)/$(BINARY) service install
-	$(BUILD_DIR)/$(BINARY) service enable
-	@echo "✅ Service installed and enabled"
-	@echo "💡 Start with: systemctl --user start feelpulse"
-
-uninstall-service: build ## Uninstall systemd service
-	@echo "🗑️  Uninstalling systemd service..."
-	$(BUILD_DIR)/$(BINARY) service uninstall
-	@echo "✅ Service uninstalled"
-
-logs: ## Tail gateway logs
-	@tail -f $(LOG_FILE)
+restart: build ## Restart gateway daemon
+	@echo "🔄 Restarting gateway..."
+	$(BUILD_DIR)/$(BINARY) restart
 
 status: build ## Show gateway status
 	$(BUILD_DIR)/$(BINARY) status
 
-tui: build ## Launch interactive terminal chat
-	$(BUILD_DIR)/$(BINARY) tui
+logs: build ## View gateway logs (live, Ctrl+C to exit)
+	$(BUILD_DIR)/$(BINARY) logs
 
-auth: build ## Configure authentication (API key or setup-token)
-	$(BUILD_DIR)/$(BINARY) auth
-
-init: build ## Initialize config
-	$(BUILD_DIR)/$(BINARY) init
+reset: build ## Clear all memory and sessions (requires confirmation)
+	@echo "⚠️  This will clear all data!"
+	$(BUILD_DIR)/$(BINARY) reset
 
 ## Development
+
+run: build start ## Build and start gateway (alias for: make build start)
+
+dev: fmt vet build start ## Format, vet, build, and start
 
 test: ## Run all tests
 	@echo "🧪 Running tests..."
@@ -105,6 +81,18 @@ test: ## Run all tests
 
 test-short: ## Run tests (no race detector, faster)
 	$(GOTEST) ./...
+
+test-integration: build ## Run integration tests
+	@echo "🧪 Running integration tests..."
+	$(GOTEST) -v -tags=integration ./cmd/feelpulse/...
+
+bench: ## Run benchmarks
+	@echo "⚡ Running benchmarks..."
+	$(GOTEST) -bench=. -benchmem ./internal/session/...
+
+bench-all: ## Run all benchmarks with full output
+	@echo "⚡ Running all benchmarks..."
+	$(GOTEST) -bench=. -benchmem -benchtime=3s ./...
 
 fmt: ## Format code
 	@echo "📝 Formatting..."
@@ -115,7 +103,7 @@ vet: ## Vet code
 	$(GOVET) ./...
 
 lint: ## Run golangci-lint (requires golangci-lint installed)
-	@which golangci-lint > /dev/null || (echo "Install: brew install golangci-lint" && exit 1)
+	@which golangci-lint > /dev/null || (echo "❌ Install: brew install golangci-lint" && exit 1)
 	golangci-lint run ./...
 
 deps: ## Download and tidy dependencies
@@ -128,10 +116,6 @@ clean: ## Remove build artifacts
 	$(GOCLEAN)
 	rm -rf $(BUILD_DIR)
 	@echo "✅ Clean"
-
-## Combos
-
-dev: fmt vet build start ## Format, vet, build, and start (foreground)
 
 check: fmt vet test ## Format, vet, and run all tests
 
@@ -177,26 +161,21 @@ docker-compose-up: ## Start with docker-compose
 docker-compose-down: ## Stop docker-compose
 	docker-compose down
 
-## Benchmarks
-
-bench: ## Run benchmarks
-	@echo "⚡ Running benchmarks..."
-	$(GOTEST) -bench=. -benchmem ./internal/session/...
-
-bench-all: ## Run all benchmarks with full output
-	@echo "⚡ Running all benchmarks..."
-	$(GOTEST) -bench=. -benchmem -benchtime=3s ./...
-
-## Integration Tests
-
-test-integration: build ## Run integration tests
-	@echo "🧪 Running integration tests..."
-	$(GOTEST) -v -tags=integration ./cmd/feelpulse/...
-
 ## Help
 
 help: ## Show this help
-	@echo "FeelPulse Makefile"
+	@echo "FeelPulse Makefile Commands:"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  make setup         # First-time setup"
+	@echo "  make start         # Start gateway"
+	@echo "  make logs          # View logs"
+	@echo "  make stop          # Stop gateway"
+	@echo ""
+	@echo "Development:"
+	@echo "  make dev           # Format + vet + build + start"
+	@echo "  make check         # Format + vet + test"
+	@echo "  make test          # Run all tests"
