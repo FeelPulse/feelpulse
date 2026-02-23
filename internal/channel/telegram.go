@@ -307,11 +307,25 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	log.Printf("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
 
-	// Send typing indicator
-	_ = t.SendTypingAction(tgMsg.Chat.ID)
+	// Keep typing indicator alive during processing
+	stopTyping := make(chan struct{})
+	go func() {
+		_ = t.SendTypingAction(tgMsg.Chat.ID)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = t.SendTypingAction(tgMsg.Chat.ID)
+			case <-stopTyping:
+				return
+			}
+		}
+	}()
 	
 	// Call handler
 	reply, err := t.handler(msg)
+	close(stopTyping)
 
 	if err != nil {
 		log.Printf("❌ Handler error: %v", err)
@@ -415,13 +429,26 @@ func (t *TelegramBot) handlePhotoMessage(ctx context.Context, tgMsg *TelegramMes
 
 	log.Printf("📷 [%s] %s: [Photo] %s", msg.Channel, msg.From, text)
 
-	// Send typing indicator
-	if err := t.SendTypingAction(tgMsg.Chat.ID); err != nil {
-		log.Printf("⚠️ Failed to send typing action: %v", err)
-	}
+	// Keep typing indicator alive during processing
+	stopTyping := make(chan struct{})
+	go func() {
+		_ = t.SendTypingAction(tgMsg.Chat.ID)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = t.SendTypingAction(tgMsg.Chat.ID)
+			case <-stopTyping:
+				return
+			}
+		}
+	}()
 
 	// Call handler
 	reply, err := t.handler(msg)
+	close(stopTyping)
+	
 	if err != nil {
 		log.Printf("❌ Handler error: %v", err)
 		return
