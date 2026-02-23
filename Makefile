@@ -1,7 +1,7 @@
 .PHONY: build install clean test run start stop restart logs status tui fmt vet lint deps dev check help install-service uninstall-service docker-build docker-run docker-stop docker-push bench test-integration
 
 # Binary name
-BINARY=feelpulse
+BINARY=fp
 
 # Build directory
 BUILD_DIR=./build
