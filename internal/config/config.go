@@ -163,7 +163,7 @@ func Default() *Config {
 			},
 		},
 		Log: LogConfig{
-			Level: "info",
+			Level: "debug", // Default to debug for development
 		},
 		Admin: AdminConfig{
 			Username: "", // Will default to first allowedUser
