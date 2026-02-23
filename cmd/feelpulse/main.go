@@ -297,46 +297,62 @@ func cmdGatewayStatus() {
 	fmt.Println("\n📝 View logs: fp logs")
 }
 
-func cmdGatewayStop() {
+// stopGateway stops the gateway daemon (returns error if not running or failed)
+func stopGateway() error {
 	pid, err := readPID()
 	if err != nil {
-		fmt.Println("❌ Gateway is not running (no PID file)")
-		return
+		return fmt.Errorf("gateway is not running (no PID file)")
 	}
 
 	if !isProcessRunning(pid) {
-		fmt.Printf("⚠️  Gateway is not running (stale PID: %d)\n", pid)
 		os.Remove(pidFile())
-		fmt.Println("✅ Cleaned up stale PID file")
-		return
+		return fmt.Errorf("gateway is not running (stale PID: %d)", pid)
 	}
 
 	// Send SIGTERM
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to find process: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to find process: %v", err)
 	}
 
 	if err := process.Signal(syscall.SIGTERM); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to stop gateway: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to send SIGTERM: %v", err)
 	}
 
-	// Wait for shutdown
+	// Wait for shutdown (up to 5 seconds)
 	for i := 0; i < 10; i++ {
 		time.Sleep(500 * time.Millisecond)
 		if !isProcessRunning(pid) {
-			break
+			os.Remove(pidFile())
+			return nil
 		}
 	}
 
+	// Force kill if still running
 	if isProcessRunning(pid) {
-		fmt.Println("⚠️  Gateway did not stop gracefully, sending SIGKILL...")
 		process.Kill()
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	os.Remove(pidFile())
+	return nil
+}
+
+func cmdGatewayStop() {
+	err := stopGateway()
+	if err != nil {
+		if strings.Contains(err.Error(), "not running") {
+			fmt.Printf("❌ %v\n", err)
+			if strings.Contains(err.Error(), "stale PID") {
+				fmt.Println("✅ Cleaned up stale PID file")
+			}
+			return
+		}
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+
+	pid, _ := readPID()
 	fmt.Printf("✅ Gateway stopped (was PID: %d)\n", pid)
 }
 
@@ -417,6 +433,12 @@ func cmdGatewayRestart() {
 }
 
 func cmdReset() {
+	// Check if gateway is running
+	wasRunning := false
+	if pid, err := readPID(); err == nil && isProcessRunning(pid) {
+		wasRunning = true
+	}
+
 	// Load config to get workspace path
 	var workspacePath string
 	if cfg, err := config.Load(); err == nil && cfg.Workspace.Path != "" {
@@ -428,6 +450,10 @@ func cmdReset() {
 	// Show what will be deleted
 	fmt.Println("⚠️  *Reset Confirmation Required*")
 	fmt.Println()
+	if wasRunning {
+		fmt.Println("Gateway is currently running and will be stopped.")
+		fmt.Println()
+	}
 	fmt.Println("This will:")
 	fmt.Println("  - Clear ALL session history (conversations, reminders, sub-agents, pins)")
 	fmt.Println("  - Remove IDENTITY.md, MEMORY.md, and memory/ directory")
@@ -447,6 +473,18 @@ func cmdReset() {
 	if input != "yes" {
 		fmt.Println("❌ Reset cancelled.")
 		os.Exit(0)
+	}
+
+	// Stop gateway if running
+	if wasRunning {
+		fmt.Println()
+		fmt.Println("🛑 Stopping gateway...")
+		if err := stopGateway(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to stop gateway cleanly: %v\n", err)
+			fmt.Println("   Proceeding with reset anyway...")
+		} else {
+			fmt.Println("✅ Gateway stopped")
+		}
 	}
 
 	// Delete database file
@@ -472,8 +510,8 @@ func cmdReset() {
 	fmt.Println()
 	fmt.Println("🎉 Reset complete!")
 	fmt.Println()
-	fmt.Println("Next time you start FeelPulse, it will run the bootstrap process.")
-	fmt.Println("The bot will introduce itself and ask for your name.")
+	fmt.Println("To start fresh, run:")
+	fmt.Println("  fp start")
 }
 
 func cmdVersion() {
