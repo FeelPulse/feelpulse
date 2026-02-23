@@ -21,6 +21,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/channel"
 	"github.com/FeelPulse/feelpulse/internal/command"
 	"github.com/FeelPulse/feelpulse/internal/config"
+	"github.com/FeelPulse/feelpulse/internal/dailylog"
 	"github.com/FeelPulse/feelpulse/internal/heartbeat"
 	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/internal/memory"
@@ -46,6 +47,7 @@ type Gateway struct {
 	commands       *command.Handler
 	memory         *memory.Manager
 	compactor      *session.Compactor
+	dailylog       *dailylog.Writer
 	limiter        *ratelimit.Limiter
 	watcher        *watcher.ConfigWatcher
 	heartbeat      *heartbeat.Service
@@ -96,6 +98,9 @@ func New(cfg *config.Config) *Gateway {
 	} else if memMgr.Soul() != "" || memMgr.User() != "" || memMgr.Memory() != "" {
 		log.Info("📂 Workspace loaded from %s", workspacePath)
 	}
+
+	// Initialize daily log writer (enabled by default)
+	dailylogWriter := dailylog.NewWriter(workspacePath, true)
 
 	// Initialize rate limiter
 	limiter := ratelimit.New(cfg.Agent.RateLimit)
@@ -157,6 +162,7 @@ func New(cfg *config.Config) *Gateway {
 		db:           sqliteStore,
 		commands:     command.NewHandler(sessions, cfg),
 		memory:       memMgr,
+		dailylog:     dailylogWriter,
 		limiter:      limiter,
 		usage:        usageTracker,
 		toolRegistry: toolRegistry,
@@ -765,6 +771,13 @@ func (gw *Gateway) prepareMessageProcessing(msg *types.Message) (*messageProcess
 	// Add incoming message to session history (and persist)
 	gw.sessions.AddMessageAndPersist(msg.Channel, userID, *msg)
 
+	// Log to daily file
+	if gw.dailylog != nil {
+		if err := gw.dailylog.Log(*msg); err != nil {
+			reqLog.Warn("Failed to write daily log: %v", err)
+		}
+	}
+
 	// Get conversation history for agent
 	history := sess.GetAllMessages()
 
@@ -811,6 +824,13 @@ func (gw *Gateway) finalizeMessageProcessing(msg *types.Message, ctx *messagePro
 
 	// Add bot reply to session history (and persist)
 	gw.sessions.AddMessageAndPersist(msg.Channel, ctx.userID, *reply)
+
+	// Log bot reply to daily file
+	if gw.dailylog != nil {
+		if err := gw.dailylog.Log(*reply); err != nil {
+			ctx.reqLog.Warn("Failed to write daily log: %v", err)
+		}
+	}
 }
 
 // handleMessageStreaming processes messages with streaming support for Telegram
