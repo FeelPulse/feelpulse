@@ -378,7 +378,7 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 			maxTokens = session.DefaultMaxContextTokens
 		}
 		gw.mu.Lock()
-		gw.compactor = session.NewCompactor(summarizer, maxTokens, session.DefaultKeepLastN)
+		gw.compactor = session.NewCompactor(summarizer, maxTokens, session.DefaultKeepRecentTokens)
 		gw.mu.Unlock()
 		gw.log.Info("📦 Context compaction enabled (threshold: %dk tokens)", maxTokens/1000)
 	}

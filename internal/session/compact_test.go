@@ -65,7 +65,7 @@ func TestNeedsCompaction(t *testing.T) {
 }
 
 func TestCompactor_SplitMessages(t *testing.T) {
-	// Create 10 messages, should keep last 5
+	// Create 10 messages, each 1000 tokens
 	messages := make([]types.Message, 10)
 	for i := 0; i < 10; i++ {
 		messages[i] = types.Message{
@@ -74,7 +74,8 @@ func TestCompactor_SplitMessages(t *testing.T) {
 	}
 	// Total: 10,000 tokens
 
-	c := NewCompactor(nil, 5000, 5)
+	// Keep recent 5000 tokens (should be last 5 messages)
+	c := NewCompactor(nil, 10000, 5000)
 	toSummarize, toKeep := c.SplitMessages(messages)
 
 	if len(toKeep) != 5 {
@@ -92,18 +93,19 @@ func TestCompactor_SplitMessages(t *testing.T) {
 	}
 }
 
-func TestCompactor_SplitMessages_KeepAtLeastN(t *testing.T) {
-	// Only 3 messages, keepLastN = 5
+func TestCompactor_SplitMessages_KeepAll(t *testing.T) {
+	// Only 3 small messages (total ~1 token)
 	messages := []types.Message{
-		{Text: "one"},
-		{Text: "two"},
-		{Text: "three"},
+		{Text: "one"},   // 0 tokens (3/4=0)
+		{Text: "two"},   // 0 tokens
+		{Text: "three"}, // 1 token (5/4=1)
 	}
 
-	c := NewCompactor(nil, 1000, 5)
+	// keepRecentTokens = 500, which is way more than we have
+	c := NewCompactor(nil, 1000, 500)
 	toSummarize, toKeep := c.SplitMessages(messages)
 
-	// Should keep all since we have fewer than keepLastN
+	// Should keep all since total tokens < keepRecentTokens
 	if len(toKeep) != 3 {
 		t.Errorf("toKeep len = %d, want 3", len(toKeep))
 	}
@@ -146,7 +148,7 @@ func TestCompactor_CompactIfNeeded_BelowThreshold(t *testing.T) {
 	}
 
 	mock := &MockSummarizer{summary: "ignored"}
-	c := NewCompactor(mock, 80000, 5)
+	c := NewCompactor(mock, 80000, 10000)
 
 	result, err := c.CompactIfNeeded(messages)
 	if err != nil {
@@ -173,7 +175,7 @@ func TestCompactor_CompactIfNeeded_AboveThreshold(t *testing.T) {
 	// Total: 100,000 tokens, above 80k threshold
 
 	mock := &MockSummarizer{summary: "Summary of earlier conversation."}
-	c := NewCompactor(mock, 80000, 10) // keep last 10
+	c := NewCompactor(mock, 80000, 10000) // keep recent 10k tokens = last 10 messages
 
 	result, err := c.CompactIfNeeded(messages)
 	if err != nil {
@@ -210,7 +212,7 @@ func TestCompactor_CompactIfNeeded_PreserveRecentMessages(t *testing.T) {
 	// Total: 100,000 tokens
 
 	mock := &MockSummarizer{summary: "Summary"}
-	c := NewCompactor(mock, 80000, 5) // keep last 5
+	c := NewCompactor(mock, 80000, 25000) // keep recent 25k tokens = last 5 messages
 
 	result, err := c.CompactIfNeeded(messages)
 	if err != nil {

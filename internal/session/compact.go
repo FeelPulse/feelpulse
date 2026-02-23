@@ -10,8 +10,8 @@ import (
 const (
 	// DefaultMaxContextTokens is the default threshold for context compaction
 	DefaultMaxContextTokens = 80000
-	// DefaultKeepLastN is the default number of recent messages to keep intact
-	DefaultKeepLastN = 10
+	// DefaultKeepRecentTokens is the default number of recent tokens to keep intact
+	DefaultKeepRecentTokens = 15000
 )
 
 // Summarizer interface for summarizing conversation history
@@ -21,23 +21,23 @@ type Summarizer interface {
 
 // Compactor handles context compaction by summarizing old messages
 type Compactor struct {
-	summarizer Summarizer
-	maxTokens  int
-	keepLastN  int
+	summarizer       Summarizer
+	maxTokens        int
+	keepRecentTokens int
 }
 
 // NewCompactor creates a new Compactor
-func NewCompactor(summarizer Summarizer, maxTokens int, keepLastN int) *Compactor {
+func NewCompactor(summarizer Summarizer, maxTokens int, keepRecentTokens int) *Compactor {
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxContextTokens
 	}
-	if keepLastN <= 0 {
-		keepLastN = DefaultKeepLastN
+	if keepRecentTokens <= 0 {
+		keepRecentTokens = DefaultKeepRecentTokens
 	}
 	return &Compactor{
-		summarizer: summarizer,
-		maxTokens:  maxTokens,
-		keepLastN:  keepLastN,
+		summarizer:       summarizer,
+		maxTokens:        maxTokens,
+		keepRecentTokens: keepRecentTokens,
 	}
 }
 
@@ -69,13 +69,40 @@ func NeedsCompaction(messages []types.Message, maxTokens int) bool {
 }
 
 // SplitMessages splits messages into ones to summarize and ones to keep
+// Uses token-based splitting: accumulates from newest messages backwards
+// until keepRecentTokens threshold is reached
 func (c *Compactor) SplitMessages(messages []types.Message) (toSummarize, toKeep []types.Message) {
-	if len(messages) <= c.keepLastN {
-		// Keep all messages if we have fewer than keepLastN
+	if len(messages) == 0 {
+		return nil, nil
+	}
+
+	// Accumulate tokens from newest to oldest
+	keepTokens := 0
+	splitIdx := -1 // -1 means "keep everything"
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msgTokens := EstimateTokens(messages[i].Text)
+		
+		// If adding this message would exceed budget, stop here
+		if keepTokens+msgTokens > c.keepRecentTokens {
+			splitIdx = i + 1
+			break
+		}
+		
+		keepTokens += msgTokens
+	}
+
+	// If splitIdx is still -1, we kept all messages (total < keepRecentTokens)
+	if splitIdx == -1 {
 		return nil, messages
 	}
 
-	splitIdx := len(messages) - c.keepLastN
+	// If we ended at index 0, keep everything
+	if splitIdx == 0 {
+		return nil, messages
+	}
+
+	// Split at the computed index
 	return messages[:splitIdx], messages[splitIdx:]
 }
 

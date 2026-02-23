@@ -110,7 +110,7 @@ func BenchmarkContextCompaction(b *testing.B) {
 	mockSummarizer := &BenchmarkSummarizer{}
 
 	// Create compactor with realistic threshold
-	compactor := NewCompactor(mockSummarizer, 80000, 10)
+	compactor := NewCompactor(mockSummarizer, 80000, 15000)
 
 	// Create large message history
 	messages := make([]types.Message, 100)
@@ -193,7 +193,7 @@ func BenchmarkNeedsCompaction(b *testing.B) {
 
 // BenchmarkSplitMessages benchmarks message splitting
 func BenchmarkSplitMessages(b *testing.B) {
-	compactor := NewCompactor(nil, 80000, 10)
+	compactor := NewCompactor(nil, 80000, 15000)
 
 	messages := make([]types.Message, 100)
 	for i := 0; i < 100; i++ {
