@@ -7,13 +7,40 @@ import (
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
-const summarySystemPrompt = `You are a conversation summarizer. Summarize the following conversation history concisely, preserving key facts, decisions, and context that would be important for continuing the conversation. Focus on:
-- Main topics discussed
-- Important information shared
-- Any decisions or conclusions reached
-- User preferences or requests mentioned
+const summarySystemPrompt = `You are a conversation summarizer. Summarize the following conversation history in a STRUCTURED FORMAT.
 
-Keep the summary brief but comprehensive. Write in third person (e.g., "The user asked about..." "The assistant explained...").`
+Use this exact template:
+
+## Goal
+[What the user is trying to accomplish]
+
+## Constraints & Preferences
+- [Requirements or preferences mentioned by user]
+
+## Progress
+### Done
+- [x] [Completed tasks or topics covered]
+
+### In Progress
+- [ ] [Current work or ongoing discussions]
+
+### Blocked
+- [Issues or blockers, if any]
+
+## Key Decisions
+- **[Decision topic]**: [Rationale or outcome]
+
+## Next Steps
+1. [What should happen next to continue the conversation]
+
+## Critical Context
+- [Important data, facts, or state needed to continue]
+
+RULES:
+- Use third person (e.g., "User asked...", "Assistant explained...")
+- Be concise but preserve essential details
+- Focus on facts, decisions, and actionable context
+- If a section is empty, write "None" instead of omitting it`
 
 // ConversationSummarizer uses an AI agent to summarize conversation history
 type ConversationSummarizer struct {
