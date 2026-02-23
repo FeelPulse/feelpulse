@@ -2,10 +2,10 @@ package session
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -82,7 +82,7 @@ func (s *Store) SetPersister(p Persister) error {
 		}
 
 		if err != nil {
-			log.Printf("⚠️  Failed to load session %s: %v", key, err)
+			logger.Warn("⚠️  Failed to load session %s: %v", key, err)
 			continue
 		}
 
@@ -102,7 +102,7 @@ func (s *Store) SetPersister(p Persister) error {
 	}
 
 	if len(keys) > 0 {
-		log.Printf("📂 Loaded %d sessions from database", len(keys))
+		logger.Info("📂 Loaded %d sessions from database", len(keys))
 	}
 
 	return nil
@@ -168,7 +168,7 @@ func (s *Store) Delete(channel, userID string) {
 	// Delete from persistence
 	if persister != nil {
 		if err := persister.Delete(key); err != nil {
-			log.Printf("⚠️  Failed to delete session from DB: %v", err)
+			logger.Warn("⚠️  Failed to delete session from DB: %v", err)
 		}
 	}
 }
@@ -205,11 +205,11 @@ func (s *Store) AddMessageAndPersist(channel, userID string, msg types.Message) 
 		// Use SaveWithProfile if available
 		if pWithProfile, ok := persister.(PersisterWithProfile); ok {
 			if err := pWithProfile.SaveWithProfile(sess.Key, messages, model, profile); err != nil {
-				log.Printf("⚠️  Failed to persist session: %v", err)
+				logger.Warn("⚠️  Failed to persist session: %v", err)
 			}
 		} else {
 			if err := persister.Save(sess.Key, messages, model); err != nil {
-				log.Printf("⚠️  Failed to persist session: %v", err)
+				logger.Warn("⚠️  Failed to persist session: %v", err)
 			}
 		}
 	}
@@ -234,11 +234,11 @@ func (s *Store) Persist(channel, userID string) {
 	// Use SaveWithProfile if available
 	if pWithProfile, ok := persister.(PersisterWithProfile); ok {
 		if err := pWithProfile.SaveWithProfile(key, messages, model, profile); err != nil {
-			log.Printf("⚠️  Failed to persist session: %v", err)
+			logger.Warn("⚠️  Failed to persist session: %v", err)
 		}
 	} else {
 		if err := persister.Save(key, messages, model); err != nil {
-			log.Printf("⚠️  Failed to persist session: %v", err)
+			logger.Warn("⚠️  Failed to persist session: %v", err)
 		}
 	}
 }
@@ -307,7 +307,7 @@ func (s *Store) ClearAndPersist(channel, userID string) {
 	// Delete from persistence (clear = remove from DB)
 	if persister != nil {
 		if err := persister.Delete(key); err != nil {
-			log.Printf("⚠️  Failed to delete session from DB: %v", err)
+			logger.Warn("⚠️  Failed to delete session from DB: %v", err)
 		}
 	}
 }

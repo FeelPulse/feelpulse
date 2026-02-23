@@ -2,8 +2,8 @@ package agent
 
 import (
 	"fmt"
-	"log"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -34,7 +34,7 @@ func (f *FailoverAgent) Chat(messages []types.Message) (*types.AgentResponse, er
 		return resp, nil
 	}
 
-	log.Printf("⚠️ Primary agent (%s) failed: %v, trying fallback (%s)", f.primary.Name(), err, f.fallback.Name())
+	logger.Warn("⚠️ Primary agent (%s) failed: %v, trying fallback (%s)", f.primary.Name(), err, f.fallback.Name())
 
 	// Try fallback
 	resp, err = f.fallback.Chat(messages)
@@ -53,7 +53,7 @@ func (f *FailoverAgent) ChatStream(messages []types.Message, systemPrompt string
 		return resp, nil
 	}
 
-	log.Printf("⚠️ Primary agent (%s) streaming failed: %v, trying fallback (%s)", f.primary.Name(), err, f.fallback.Name())
+	logger.Warn("⚠️ Primary agent (%s) streaming failed: %v, trying fallback (%s)", f.primary.Name(), err, f.fallback.Name())
 
 	// Try fallback
 	resp, err = f.fallback.ChatStream(messages, systemPrompt, callback)

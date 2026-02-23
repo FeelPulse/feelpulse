@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -428,7 +428,7 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 
 			event, err := parseSSEEvent(data)
 			if err != nil {
-				log.Printf("⚠️ Failed to parse SSE event: %v", err)
+				logger.Warn("⚠️ Failed to parse SSE event: %v", err)
 				continue
 			}
 
@@ -554,32 +554,32 @@ func (c *AnthropicClient) ChatWithTools(
 			switch toolUse.Name {
 			case "exec":
 				if cmd, ok := input["command"].(string); ok {
-					log.Printf("🔧 [tool] exec: %s", cmd)
+					logger.Debug("🔧 [tool] exec: %s", cmd)
 				} else {
-					log.Printf("🔧 [tool] executing exec")
+					logger.Debug("🔧 [tool] executing exec")
 				}
 			case "file_read", "file_write", "file_list":
 				if path, ok := input["path"].(string); ok {
-					log.Printf("🔧 [tool] %s: %s", toolUse.Name, path)
+					logger.Debug("🔧 [tool] %s: %s", toolUse.Name, path)
 				} else {
-					log.Printf("🔧 [tool] executing %s", toolUse.Name)
+					logger.Debug("🔧 [tool] executing %s", toolUse.Name)
 				}
 			case "web_search":
 				if q, ok := input["query"].(string); ok {
-					log.Printf("🔧 [tool] web_search: %s", q)
+					logger.Debug("🔧 [tool] web_search: %s", q)
 				} else {
-					log.Printf("🔧 [tool] executing web_search")
+					logger.Debug("🔧 [tool] executing web_search")
 				}
 			default:
-				log.Printf("🔧 [tool] executing %s", toolUse.Name)
+				logger.Debug("🔧 [tool] executing %s", toolUse.Name)
 			}
 
 			result, err := executor(toolUse.Name, input)
 			if err != nil {
 				result = fmt.Sprintf("Error: %v", err)
-				log.Printf("🔧 [tool] %s → error: %v", toolUse.Name, err)
+				logger.Debug("🔧 [tool] %s → error: %v", toolUse.Name, err)
 			} else {
-				log.Printf("🔧 [tool] %s → success (%d chars)", toolUse.Name, len(result))
+				logger.Debug("🔧 [tool] %s → success (%d chars)", toolUse.Name, len(result))
 			}
 
 			toolResults = append(toolResults, ContentBlock{
@@ -660,7 +660,7 @@ func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback 
 
 		event, parseErr := parseSSEEvent(data)
 		if parseErr != nil {
-			log.Printf("⚠️ Failed to parse SSE event: %v", parseErr)
+			logger.Warn("⚠️ Failed to parse SSE event: %v", parseErr)
 			continue
 		}
 

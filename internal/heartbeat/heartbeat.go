@@ -4,11 +4,12 @@ package heartbeat
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/FeelPulse/feelpulse/internal/logger"
 )
 
 const (
@@ -117,7 +118,7 @@ func (s *Service) Start() {
 	s.mu.Unlock()
 
 	interval := time.Duration(s.cfg.IntervalMinutes) * time.Minute
-	log.Printf("💓 Heartbeat service started (interval: %v)", interval)
+	logger.Info("💓 Heartbeat service started (interval: %v)", interval)
 
 	go s.loop(interval)
 }
@@ -133,7 +134,7 @@ func (s *Service) Stop() {
 
 	s.running = false
 	close(s.stopChan)
-	log.Printf("💓 Heartbeat service stopped")
+	logger.Info("💓 Heartbeat service stopped")
 }
 
 // IsRunning returns whether the service is running

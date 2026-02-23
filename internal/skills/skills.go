@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/internal/tools"
 )
 
@@ -72,7 +72,7 @@ func (l *Loader) Load() ([]*Skill, error) {
 
 		skill, err := ParseSkillMD(entry.Name(), string(content))
 		if err != nil {
-			log.Printf("⚠️ Failed to parse skill %s: %v", entry.Name(), err)
+			logger.Warn("⚠️ Failed to parse skill %s: %v", entry.Name(), err)
 			continue
 		}
 
@@ -241,7 +241,7 @@ func NewManager(dir string) *Manager {
 
 	// Load skills on creation
 	if err := mgr.Reload(); err != nil {
-		log.Printf("⚠️ Failed to load skills: %v", err)
+		logger.Warn("⚠️ Failed to load skills: %v", err)
 	}
 
 	return mgr
@@ -267,7 +267,7 @@ func (m *Manager) Reload() error {
 	}
 
 	if len(skills) > 0 {
-		log.Printf("🛠️ Loaded %d skills", len(skills))
+		logger.Info("🛠️ Loaded %d skills", len(skills))
 	}
 
 	return nil

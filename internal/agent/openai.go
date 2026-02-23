@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/FeelPulse/feelpulse/internal/logger"
 	"github.com/FeelPulse/feelpulse/pkg/types"
 )
 
@@ -176,7 +176,7 @@ func (c *OpenAIClient) ChatWithSystem(messages []types.Message, systemPrompt str
 	}
 
 	text := openaiResp.Choices[0].Message.Content
-	log.Printf("📥 [openai] response: %s", text)
+	logger.Debug("📥 [openai] response: %s", text)
 
 	return &types.AgentResponse{
 		Text:  text,
@@ -247,7 +247,7 @@ func (c *OpenAIClient) ChatStream(messages []types.Message, systemPrompt string,
 		data := strings.TrimPrefix(line, "data: ")
 		delta, done, err := parseOpenAISSE(data)
 		if err != nil {
-			log.Printf("⚠️ Failed to parse OpenAI SSE: %v", err)
+			logger.Warn("⚠️ Failed to parse OpenAI SSE: %v", err)
 			continue
 		}
 
@@ -268,7 +268,7 @@ func (c *OpenAIClient) ChatStream(messages []types.Message, systemPrompt string,
 	}
 
 	text := fullText.String()
-	log.Printf("📥 [openai/stream] response: %s", text)
+	logger.Debug("📥 [openai/stream] response: %s", text)
 
 	return &types.AgentResponse{
 		Text:  text,
