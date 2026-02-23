@@ -483,10 +483,13 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 			caption, _ := reply.Metadata["screenshot_caption"].(string)
 			// Send text first
 			if reply.Text != "" {
-				parts := SplitLongMessage(reply.Text, SafeMessageLength)
-				for _, part := range parts {
-					if err := t.SendMessage(chatID, part, true); err != nil {
-						log.Printf("❌ Failed to send reply: %v", err)
+				messages := SplitIntoMessages(reply.Text, 800)
+				for _, msg := range messages {
+					parts := SplitLongMessage(msg, SafeMessageLength)
+					for _, part := range parts {
+						if err := t.SendMessage(chatID, part, true); err != nil {
+							log.Printf("❌ Failed to send reply: %v", err)
+						}
 					}
 				}
 			}
@@ -503,16 +506,14 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 	// Check if reply has a keyboard
 	if reply.Keyboard != nil {
 		if keyboard, ok := reply.Keyboard.(InlineKeyboard); ok {
-			// For messages with keyboards, send first part with keyboard
-			parts := SplitLongMessage(reply.Text, SafeMessageLength)
-			if len(parts) == 1 {
-				if err := t.SendMessageWithKeyboard(chatID, reply.Text, keyboard, true); err != nil {
-					log.Printf("❌ Failed to send reply with keyboard: %v", err)
-				}
-			} else {
-				// Send all parts, attach keyboard to last one
-				for i, part := range parts {
-					if i == len(parts)-1 {
+			// Split into multiple messages, attach keyboard to last one
+			messages := SplitIntoMessages(reply.Text, 800)
+			for msgIdx, msg := range messages {
+				isLast := msgIdx == len(messages)-1
+				parts := SplitLongMessage(msg, SafeMessageLength)
+				for partIdx, part := range parts {
+					// Attach keyboard to the very last part of the very last message
+					if isLast && partIdx == len(parts)-1 {
 						if err := t.SendMessageWithKeyboard(chatID, part, keyboard, true); err != nil {
 							log.Printf("❌ Failed to send reply with keyboard: %v", err)
 						}
@@ -527,11 +528,15 @@ func (t *TelegramBot) sendReply(chatID int64, reply *types.Message) {
 		}
 	}
 	
-	// No keyboard - split long messages
-	parts := SplitLongMessage(reply.Text, SafeMessageLength)
-	for _, part := range parts {
-		if err := t.SendMessage(chatID, part, true); err != nil {
-			log.Printf("❌ Failed to send reply: %v", err)
+	// No keyboard - split into multiple messages for better UX
+	messages := SplitIntoMessages(reply.Text, 800)
+	for _, msg := range messages {
+		// Each message might still need Telegram-length splitting
+		parts := SplitLongMessage(msg, SafeMessageLength)
+		for _, part := range parts {
+			if err := t.SendMessage(chatID, part, true); err != nil {
+				log.Printf("❌ Failed to send reply: %v", err)
+			}
 		}
 	}
 }

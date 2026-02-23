@@ -120,6 +120,102 @@ func findLastSentenceEnd(text string) int {
 	return -1
 }
 
+// SplitIntoMessages splits a long message into multiple messages for better UX.
+// Aggressively splits at paragraph/sentence boundaries even for shorter messages
+// to avoid wall-of-text appearance.
+func SplitIntoMessages(text string, threshold int) []string {
+	if threshold <= 0 {
+		threshold = 800 // Default: split if > 800 chars
+	}
+
+	if len(text) <= threshold {
+		return []string{text}
+	}
+
+	// Split by double newlines first (paragraphs)
+	paragraphs := strings.Split(text, "\n\n")
+	
+	var messages []string
+	var currentMsg strings.Builder
+	
+	for i, para := range paragraphs {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		
+		// If adding this paragraph would exceed threshold, flush current message
+		if currentMsg.Len() > 0 && currentMsg.Len()+len(para)+2 > threshold {
+			messages = append(messages, strings.TrimSpace(currentMsg.String()))
+			currentMsg.Reset()
+		}
+		
+		// Add paragraph to current message
+		if currentMsg.Len() > 0 {
+			currentMsg.WriteString("\n\n")
+		}
+		currentMsg.WriteString(para)
+		
+		// If this paragraph alone is very long, flush it immediately
+		if len(para) > threshold/2 && i < len(paragraphs)-1 {
+			messages = append(messages, strings.TrimSpace(currentMsg.String()))
+			currentMsg.Reset()
+		}
+	}
+	
+	// Flush remaining
+	if currentMsg.Len() > 0 {
+		messages = append(messages, strings.TrimSpace(currentMsg.String()))
+	}
+	
+	// If still no splits (no \n\n found), try splitting at single newlines
+	if len(messages) == 1 && len(messages[0]) > threshold {
+		lines := strings.Split(messages[0], "\n")
+		// Only try newline split if we actually have multiple lines
+		if len(lines) > 1 {
+			messages = nil
+			currentMsg.Reset()
+			
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				
+				if currentMsg.Len() > 0 && currentMsg.Len()+len(line)+1 > threshold {
+					messages = append(messages, strings.TrimSpace(currentMsg.String()))
+					currentMsg.Reset()
+				}
+				
+				if currentMsg.Len() > 0 {
+					currentMsg.WriteString("\n")
+				}
+				currentMsg.WriteString(line)
+			}
+			
+			if currentMsg.Len() > 0 {
+				messages = append(messages, strings.TrimSpace(currentMsg.String()))
+			}
+		}
+	}
+	
+	// Final safety: split any message that still exceeds threshold or Telegram limit
+	var finalMessages []string
+	for _, msg := range messages {
+		// If message is very long and we only have one message, force split
+		if len(msg) > SafeMessageLength {
+			finalMessages = append(finalMessages, SplitLongMessage(msg, SafeMessageLength)...)
+		} else if len(messages) == 1 && len(msg) > threshold {
+			// Single long message with no natural breaks - force split at threshold
+			finalMessages = append(finalMessages, SplitLongMessage(msg, threshold)...)
+		} else {
+			finalMessages = append(finalMessages, msg)
+		}
+	}
+	
+	return finalMessages
+}
+
 // TruncateForPreview truncates text for preview display (e.g., history)
 func TruncateForPreview(text string, maxLen int) string {
 	if len(text) <= maxLen {
