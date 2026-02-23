@@ -495,13 +495,13 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 		msgID := streamMsgID
 		mu.Unlock()
 
-		// No message sent yet — send the first one when we have content (plain text, no markdown)
+		// No message sent yet — send the first one when we have content (with markdown to preserve newlines)
 		if msgID == 0 && currentText != "" {
 			displayText := currentText
 			if len(displayText) > 4000 {
 				displayText = displayText[:4000] + "..."
 			}
-			newID, err := t.SendMessageAndGetID(chatID, displayText, false)
+			newID, err := t.SendMessageAndGetID(chatID, displayText, true)
 			if err != nil {
 				log.Printf("⚠️ Failed to send streaming message: %v", err)
 				return
@@ -514,7 +514,7 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 			return
 		}
 
-		// Message exists — edit it periodically
+		// Message exists — edit it periodically (with markdown to preserve newlines)
 		if msgID != 0 && sinceUpdate >= updateInterval && currentText != "" {
 			displayText := currentText
 			if len(displayText) > 4000 {
@@ -523,7 +523,7 @@ func (t *TelegramBot) handleMessageWithStreaming(ctx context.Context, chatID int
 			if displayText == lastSentText {
 				return
 			}
-			if err := t.EditMessageTextMarkdown(chatID, msgID, displayText, nil, false); err != nil {
+			if err := t.EditMessageTextMarkdown(chatID, msgID, displayText, nil, true); err != nil {
 				log.Printf("⚠️ Failed to update streaming message: %v", err)
 			} else {
 				mu.Lock()
