@@ -4,14 +4,17 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/FeelPulse/feelpulse/internal/agent"
 	"github.com/FeelPulse/feelpulse/internal/config"
 	"github.com/FeelPulse/feelpulse/internal/gateway"
 	"github.com/FeelPulse/feelpulse/internal/memory"
-	"github.com/FeelPulse/feelpulse/internal/skills"
-	"github.com/FeelPulse/feelpulse/internal/tui"
 )
 
 const version = "0.1.0"
@@ -23,22 +26,10 @@ func main() {
 	}
 
 	switch os.Args[1] {
-	case "start":
-		cmdStart()
-	case "status":
-		cmdStatus()
-	case "init":
-		cmdInit()
-	case "auth":
-		cmdAuth()
-	case "workspace":
-		cmdWorkspace()
-	case "skills":
-		cmdSkills()
-	case "service":
-		cmdService()
-	case "tui":
-		cmdTUI()
+	case "setup":
+		cmdSetup()
+	case "gw":
+		cmdGateway()
 	case "reset":
 		cmdReset()
 	case "version", "-v", "--version":
@@ -59,170 +50,95 @@ Usage:
   feelpulse <command>
 
 Commands:
-  init           Initialize configuration
-  start          Start the gateway server
-  status         Check gateway status
-  auth           Configure authentication (API key or setup-token)
-  workspace      Manage workspace files (SOUL.md, USER.md, MEMORY.md)
-    init         Create workspace directory with template files
-  skills         Manage skills (AI tools)
-    list         List loaded skills
-  service        Manage systemd service (install/uninstall/enable/disable/status)
-  tui            Start interactive terminal chat interface
+  setup          Initial setup (creates config, starts gateway daemon)
+  gw             Gateway management
+    logs         View gateway logs
+    status       Check gateway status
+    restart      Restart gateway
+    stop         Stop gateway
   reset          Clear all memory and sessions (requires confirmation)
   version        Print version
   help           Show this help`)
 }
 
-func cmdSkills() {
+func cmdGateway() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: feelpulse skills <command>")
+		fmt.Println("Usage: feelpulse gw <command>")
 		fmt.Println("\nCommands:")
-		fmt.Println("  list    List all loaded skills")
+		fmt.Println("  logs       View gateway logs")
+		fmt.Println("  status     Check if gateway is running")
+		fmt.Println("  restart    Restart gateway daemon")
+		fmt.Println("  stop       Stop gateway daemon")
 		os.Exit(1)
 	}
 
 	switch os.Args[2] {
-	case "list":
-		cmdSkillsList()
+	case "logs":
+		cmdGatewayLogs()
+	case "status":
+		cmdGatewayStatus()
+	case "restart":
+		cmdGatewayRestart()
+	case "stop":
+		cmdGatewayStop()
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown skills command: %s\n", os.Args[2])
+		fmt.Fprintf(os.Stderr, "Unknown gw command: %s\n", os.Args[2])
 		os.Exit(1)
 	}
 }
 
-func cmdSkillsList() {
-	skillsPath := skills.DefaultSkillsPath()
-	
-	// Check if config overrides workspace path
-	if cfg, err := config.Load(); err == nil && cfg.Workspace.Path != "" {
-		skillsPath = cfg.Workspace.Path + "/skills"
+func configDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".feelpulse")
+}
+
+func pidFile() string {
+	return filepath.Join(configDir(), "gateway.pid")
+}
+
+func logFile() string {
+	return filepath.Join(configDir(), "gateway.log")
+}
+
+func readPID() (int, error) {
+	data, err := os.ReadFile(pidFile())
+	if err != nil {
+		return 0, err
 	}
+	return strconv.Atoi(strings.TrimSpace(string(data)))
+}
 
-	mgr := skills.NewManager(skillsPath)
-	loaded := mgr.ListSkills()
-
-	if len(loaded) == 0 {
-		fmt.Println("📭 No skills loaded.")
-		fmt.Printf("\nSkills directory: %s\n", skillsPath)
-		fmt.Println("\nTo create a skill:")
-		fmt.Println("  1. Create a directory: mkdir -p " + skillsPath + "/my-skill")
-		fmt.Println("  2. Add SKILL.md with description and parameters")
-		fmt.Println("  3. Optionally add run.sh for execution")
-		return
+func isProcessRunning(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
 	}
+	// Send signal 0 to check if process exists
+	err = process.Signal(syscall.Signal(0))
+	return err == nil
+}
 
-	fmt.Printf("🛠️ *Loaded Skills* (%d)\n\n", len(loaded))
-	for _, skill := range loaded {
-		hasExec := ""
-		if skill.Executable != "" {
-			hasExec = " ⚡"
-		}
-		fmt.Printf("  • %s%s\n", skill.Name, hasExec)
-		if skill.Description != "" {
-			fmt.Printf("    %s\n", skill.Description)
-		}
-		if len(skill.Parameters) > 0 {
-			fmt.Printf("    Parameters: ")
-			paramNames := make([]string, len(skill.Parameters))
-			for i, p := range skill.Parameters {
-				req := ""
-				if p.Required {
-					req = "*"
-				}
-				paramNames[i] = p.Name + req
-			}
-			fmt.Printf("%s\n", strings.Join(paramNames, ", "))
+func cmdSetup() {
+	fmt.Printf("🫀 FeelPulse v%s - Setup\n\n", version)
+
+	// Check if already configured
+	cfg, err := config.Load()
+	if err == nil && (cfg.Agent.APIKey != "" || cfg.Agent.AuthToken != "") {
+		fmt.Println("⚠️  Configuration already exists.")
+		fmt.Print("Reconfigure? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(input)), "y") {
+			fmt.Println("Setup cancelled.")
+			os.Exit(0)
 		}
 		fmt.Println()
-	}
-}
-
-func cmdInit() {
-	// Create config
-	cfg := config.Default()
-	configPath, err := config.Save(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating config: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("✅ Config created: %s\n", configPath)
-
-	// Create workspace
-	workspacePath := cfg.Workspace.Path
-	if workspacePath == "" {
-		workspacePath = memory.DefaultWorkspacePath()
-	}
-
-	if err := memory.InitWorkspace(workspacePath); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Error initializing workspace: %v\n", err)
-		fmt.Println("   (You can manually run 'feelpulse workspace init' later)")
 	} else {
-		fmt.Printf("✅ Workspace initialized: %s\n", workspacePath)
-	}
-
-	fmt.Println("\n🎉 Initialization complete!")
-	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Configure authentication: feelpulse auth")
-	fmt.Println("  2. Start the gateway: feelpulse start")
-}
-
-func cmdStart() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error loading config: %v\n", err)
-		fmt.Println("Run 'feelpulse init' to create a config file.")
-		os.Exit(1)
-	}
-
-	// Validate configuration
-	validation := cfg.Validate()
-
-	// Print warnings
-	for _, warn := range validation.Warnings {
-		fmt.Fprintf(os.Stderr, "⚠️  %s\n", warn)
-	}
-
-	// Print errors and exit if invalid
-	if !validation.IsValid() {
-		fmt.Fprintf(os.Stderr, "\n❌ Configuration errors:\n")
-		for _, err := range validation.Errors {
-			fmt.Fprintf(os.Stderr, "   • %s\n", err)
-		}
-		fmt.Fprintf(os.Stderr, "\nRun 'feelpulse auth' to configure authentication.\n")
-		os.Exit(1)
-	}
-
-	fmt.Printf("🫀 FeelPulse v%s\n", version)
-	fmt.Printf("📡 Starting gateway on %s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
-	
-	// Show configured channels
-	if cfg.Channels.Telegram.Enabled {
-		fmt.Println("📱 Telegram channel enabled")
-	}
-	if cfg.Agent.AuthToken != "" {
-		fmt.Printf("🤖 Agent: %s/%s (subscription)\n", cfg.Agent.Provider, cfg.Agent.Model)
-	} else if cfg.Agent.APIKey != "" {
-		fmt.Printf("🤖 Agent: %s/%s (api-key)\n", cfg.Agent.Provider, cfg.Agent.Model)
-	}
-
-	gw := gateway.New(cfg)
-	if err := gw.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func cmdAuth() {
-	cfg, err := config.Load()
-	if err != nil {
 		cfg = config.Default()
 	}
 
+	// Configure authentication
 	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Println("🔐 FeelPulse Auth Setup")
-	fmt.Println()
 	fmt.Println("Choose authentication method:")
 	fmt.Println("  1) API Key (pay-per-token)")
 	fmt.Println("  2) Setup Token (use Claude subscription)")
@@ -249,15 +165,10 @@ func cmdAuth() {
 		}
 
 		cfg.Agent.AuthToken = token
-		cfg.Agent.APIKey = "" // clear API key
+		cfg.Agent.APIKey = ""
 		cfg.Agent.Provider = "anthropic"
 
-		path, err := config.Save(cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("\n✅ Subscription auth configured! (%s)\n", path)
+		fmt.Println("\n✅ Subscription auth configured!")
 		fmt.Println("💡 No API fees — uses your Claude subscription quota.")
 
 	case "1", "":
@@ -272,123 +183,225 @@ func cmdAuth() {
 		}
 
 		cfg.Agent.APIKey = key
-		cfg.Agent.AuthToken = "" // clear setup-token
+		cfg.Agent.AuthToken = ""
 		cfg.Agent.Provider = "anthropic"
 
-		path, err := config.Save(cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("\n✅ API key configured! (%s)\n", path)
+		fmt.Println("\n✅ API key configured!")
 
 	default:
 		fmt.Fprintln(os.Stderr, "❌ Invalid choice")
 		os.Exit(1)
 	}
-}
 
-func cmdStatus() {
-	cfg, err := config.Load()
+	// Save config
+	path, err := config.Save(cfg)
 	if err != nil {
-		fmt.Println("❌ Not configured. Run 'feelpulse init'.")
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("🫀 FeelPulse v%s\n", version)
-	fmt.Printf("📡 Gateway: http://%s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
-	
-	// Show configuration status
-	fmt.Println("\n📋 Configuration:")
-	if cfg.Agent.AuthToken != "" {
-		fmt.Printf("   🤖 Agent: %s/%s (subscription auth)\n", cfg.Agent.Provider, cfg.Agent.Model)
-	} else if cfg.Agent.APIKey != "" {
-		fmt.Printf("   🤖 Agent: %s/%s (api-key)\n", cfg.Agent.Provider, cfg.Agent.Model)
-	} else {
-		fmt.Println("   🤖 Agent: Not configured (run 'feelpulse auth')")
-	}
-	
-	if cfg.Channels.Telegram.Enabled {
-		if cfg.Channels.Telegram.BotToken != "" {
-			fmt.Println("   📱 Telegram: Configured")
-		} else {
-			fmt.Println("   📱 Telegram: Enabled but no token")
-		}
-	} else {
-		fmt.Println("   📱 Telegram: Disabled")
-	}
-
-	// Show workspace status
+	// Initialize workspace
 	workspacePath := cfg.Workspace.Path
 	if workspacePath == "" {
 		workspacePath = memory.DefaultWorkspacePath()
 	}
-	if _, err := os.Stat(workspacePath); err == nil {
-		fmt.Printf("   📂 Workspace: %s\n", workspacePath)
+	if err := os.MkdirAll(workspacePath, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: failed to create workspace: %v\n", err)
+	}
+
+	fmt.Printf("\n✅ Config saved: %s\n", path)
+	fmt.Printf("📂 Workspace: %s\n", workspacePath)
+
+	// Start gateway daemon
+	fmt.Println("\n🚀 Starting gateway daemon...")
+	if err := startDaemon(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to start daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait a bit and check if it started
+	time.Sleep(500 * time.Millisecond)
+	pid, err := readPID()
+	if err != nil || !isProcessRunning(pid) {
+		fmt.Fprintln(os.Stderr, "❌ Gateway failed to start. Check logs: feelpulse gw logs")
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Gateway started (PID: %d)\n\n", pid)
+	fmt.Printf("📡 Gateway: http://%s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
+	if cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.BotToken != "" {
+		fmt.Println("📱 Telegram: enabled")
+	}
+	fmt.Println()
+	fmt.Println("📝 View logs: feelpulse gw logs")
+	fmt.Println("🔍 Check status: feelpulse gw status")
+	fmt.Println()
+	fmt.Println("🎉 Setup complete!")
+}
+
+func startDaemon(cfg *config.Config) error {
+	// Get current executable path
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	// Prepare log file
+	logF, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer logF.Close()
+
+	// Start detached process
+	cmd := exec.Command(exe, "_internal_gateway_start")
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true, // Create new session
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// Write PID file
+	return os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0644)
+}
+
+func cmdGatewayLogs() {
+	logPath := logFile()
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		fmt.Println("📭 No logs yet.")
+		fmt.Println("\nLog file: " + logPath)
+		return
+	}
+
+	// Check for -f flag (follow)
+	follow := false
+	for _, arg := range os.Args[3:] {
+		if arg == "-f" || arg == "--follow" {
+			follow = true
+		}
+	}
+
+	if follow {
+		// Use tail -f
+		cmd := exec.Command("tail", "-f", logPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
 	} else {
-		fmt.Printf("   📂 Workspace: Not initialized (run 'feelpulse workspace init')\n")
-	}
-	
-	fmt.Println("\n✅ Config loaded")
-}
-
-func cmdWorkspace() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: feelpulse workspace <command>")
-		fmt.Println("\nCommands:")
-		fmt.Println("  init    Create workspace directory with template files")
-		os.Exit(1)
-	}
-
-	switch os.Args[2] {
-	case "init":
-		cmdWorkspaceInit()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown workspace command: %s\n", os.Args[2])
-		os.Exit(1)
+		// Show last 100 lines
+		cmd := exec.Command("tail", "-n", "100", logPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
 	}
 }
 
-func cmdWorkspaceInit() {
-	// Load config to get workspace path, or use default
-	var workspacePath string
-	if cfg, err := config.Load(); err == nil && cfg.Workspace.Path != "" {
-		workspacePath = cfg.Workspace.Path
-	} else {
-		workspacePath = memory.DefaultWorkspacePath()
+func cmdGatewayStatus() {
+	pid, err := readPID()
+	if err != nil {
+		fmt.Println("❌ Gateway is not running (no PID file)")
+		return
 	}
 
-	if err := memory.InitWorkspace(workspacePath); err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing workspace: %v\n", err)
+	if !isProcessRunning(pid) {
+		fmt.Printf("❌ Gateway is not running (stale PID: %d)\n", pid)
+		fmt.Println("\n💡 Remove stale PID file: rm " + pidFile())
+		return
+	}
+
+	fmt.Printf("✅ Gateway is running (PID: %d)\n", pid)
+
+	// Load config to show details
+	if cfg, err := config.Load(); err == nil {
+		fmt.Printf("\n📡 Gateway: http://%s:%d\n", cfg.Gateway.Bind, cfg.Gateway.Port)
+		if cfg.Channels.Telegram.Enabled {
+			fmt.Println("📱 Telegram: enabled")
+		}
+		fmt.Printf("📂 Workspace: %s\n", cfg.Workspace.Path)
+	}
+
+	fmt.Println("\n📝 View logs: feelpulse gw logs")
+}
+
+func cmdGatewayStop() {
+	pid, err := readPID()
+	if err != nil {
+		fmt.Println("❌ Gateway is not running (no PID file)")
+		return
+	}
+
+	if !isProcessRunning(pid) {
+		fmt.Printf("⚠️  Gateway is not running (stale PID: %d)\n", pid)
+		os.Remove(pidFile())
+		fmt.Println("✅ Cleaned up stale PID file")
+		return
+	}
+
+	// Send SIGTERM
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to find process: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Workspace initialized: %s\n", workspacePath)
-	fmt.Println("\nCreated template files:")
-	fmt.Println("  📄 SOUL.md   — Your AI persona (replaces system prompt)")
-	fmt.Println("  📄 USER.md   — User context information")
-	fmt.Println("  📄 MEMORY.md — Long-term memory across conversations")
-	fmt.Println("\nEdit these files to customize your assistant!")
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to stop gateway: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait for shutdown
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if !isProcessRunning(pid) {
+			break
+		}
+	}
+
+	if isProcessRunning(pid) {
+		fmt.Println("⚠️  Gateway did not stop gracefully, sending SIGKILL...")
+		process.Kill()
+	}
+
+	os.Remove(pidFile())
+	fmt.Printf("✅ Gateway stopped (was PID: %d)\n", pid)
 }
 
-func cmdTUI() {
+func cmdGatewayRestart() {
+	fmt.Println("🔄 Restarting gateway...")
+
+	// Stop if running
+	pid, err := readPID()
+	if err == nil && isProcessRunning(pid) {
+		cmdGatewayStop()
+		time.Sleep(1 * time.Second)
+	}
+
+	// Load config
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		fmt.Println("Run 'feelpulse init' to create a config file.")
+		fmt.Fprintf(os.Stderr, "❌ Error loading config: %v\n", err)
+		fmt.Println("Run 'feelpulse setup' to create a config file.")
 		os.Exit(1)
 	}
 
-	if cfg.Agent.APIKey == "" && cfg.Agent.AuthToken == "" {
-		fmt.Fprintln(os.Stderr, "❌ No authentication configured.")
-		fmt.Println("Run 'feelpulse auth' to configure API key or setup-token.")
+	// Start daemon
+	if err := startDaemon(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := tui.Run(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	time.Sleep(500 * time.Millisecond)
+	pid, err = readPID()
+	if err != nil || !isProcessRunning(pid) {
+		fmt.Fprintln(os.Stderr, "❌ Gateway failed to start. Check logs: feelpulse gw logs")
 		os.Exit(1)
 	}
+
+	fmt.Printf("✅ Gateway restarted (PID: %d)\n", pid)
 }
 
 func cmdReset() {
@@ -427,7 +440,7 @@ func cmdReset() {
 	// Delete database file
 	home, _ := os.UserHomeDir()
 	dbPath := fmt.Sprintf("%s/.feelpulse/sessions.db", home)
-	
+
 	if _, err := os.Stat(dbPath); err == nil {
 		if err := os.Remove(dbPath); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  Failed to delete database: %v\n", err)
@@ -449,4 +462,31 @@ func cmdReset() {
 	fmt.Println()
 	fmt.Println("Next time you start FeelPulse, it will run the bootstrap process.")
 	fmt.Println("The bot will introduce itself and ask for your name.")
+}
+
+func cmdVersion() {
+	fmt.Printf("FeelPulse v%s\n", version)
+}
+
+// Internal command called by daemon
+func internalGatewayStart() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	gw := gateway.New(cfg)
+	if err := gw.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func init() {
+	// Handle internal gateway start command
+	if len(os.Args) >= 2 && os.Args[1] == "_internal_gateway_start" {
+		internalGatewayStart()
+		os.Exit(0)
+	}
 }
