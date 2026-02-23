@@ -192,12 +192,12 @@ Always clone git repos here: git clone <url> %s/<repo-name>`, m.path, m.path))
 
 	// Available skills section
 	if len(m.skills) > 0 {
-		skillsList := "\n\n## Available Skills\n\nThe following skills are installed. **Check these FIRST before using basic commands.** Use `read_skill(\"<name>\")` to load full documentation.\n\n"
+		skillsList := "\n\n## Available Skills\n\n**IMPORTANT: Use read_skill(\"name\") to load documentation BEFORE using basic commands.**\n\n"
 		for _, s := range m.skills {
 			skillsList += fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description)
 			// Add usage hints for key skills
 			if s.Name == "github" {
-				skillsList += "  (use for: clone private repos, create PRs, check CI, manage issues)\n"
+				skillsList += "  **REQUIRED for ANY GitHub URL** - Load this skill immediately when you see github.com links\n"
 			}
 		}
 		parts = append(parts, skillsList)
