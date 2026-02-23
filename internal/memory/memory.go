@@ -78,6 +78,29 @@ func (m *Manager) Load() error {
 	// Load skills from skills/ directory
 	m.skills = nil
 	skillsDir := filepath.Join(m.path, "skills")
+	
+	// Auto-install bundled skills if skills directory doesn't exist or is empty
+	needsInstall := false
+	if entries, err := os.ReadDir(skillsDir); err != nil || len(entries) == 0 {
+		needsInstall = true
+	}
+	
+	if needsInstall {
+		// Create skills directory
+		if err := os.MkdirAll(skillsDir, 0755); err == nil {
+			// Copy bundled skills
+			bundled := getBundledSkills()
+			for name, content := range bundled {
+				skillDir := filepath.Join(skillsDir, name)
+				if err := os.MkdirAll(skillDir, 0755); err == nil {
+					skillPath := filepath.Join(skillDir, "SKILL.md")
+					_ = os.WriteFile(skillPath, []byte(content), 0644)
+				}
+			}
+		}
+	}
+	
+	// Load skills metadata
 	if entries, err := os.ReadDir(skillsDir); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() {
