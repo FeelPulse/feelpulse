@@ -68,18 +68,26 @@ func (m *Manager) Load() error {
 		m.memory = ""
 	}
 
-	// Auto-install bundled clawhub skill (bootstrap only)
+	// Auto-install all bundled skills (bootstrap)
 	skillsDir := filepath.Join(m.path, "skills")
-	clawhubPath := filepath.Join(skillsDir, "clawhub", "SKILL.md")
 	
-	// Check if clawhub skill exists
-	if _, err := os.Stat(clawhubPath); os.IsNotExist(err) {
+	// Check if skills directory is empty or doesn't exist
+	needsInstall := false
+	if entries, err := os.ReadDir(skillsDir); err != nil || len(entries) == 0 {
+		needsInstall = true
+	}
+	
+	if needsInstall {
 		// Create skills directory
-		if err := os.MkdirAll(filepath.Join(skillsDir, "clawhub"), 0755); err == nil {
-			// Copy bundled clawhub skill
+		if err := os.MkdirAll(skillsDir, 0755); err == nil {
+			// Install all bundled skills
 			bundled := getBundledSkills()
-			if clawhubContent, ok := bundled["clawhub"]; ok {
-				_ = os.WriteFile(clawhubPath, []byte(clawhubContent), 0644)
+			for name, content := range bundled {
+				skillDir := filepath.Join(skillsDir, name)
+				skillPath := filepath.Join(skillDir, "SKILL.md")
+				if err := os.MkdirAll(skillDir, 0755); err == nil {
+					_ = os.WriteFile(skillPath, []byte(content), 0644)
+				}
 			}
 		}
 	}

@@ -27,7 +27,6 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/metrics"
 	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
-	"github.com/FeelPulse/feelpulse/internal/skillregistry"
 	"github.com/FeelPulse/feelpulse/internal/store"
 	"github.com/FeelPulse/feelpulse/internal/subagent"
 	"github.com/FeelPulse/feelpulse/internal/tools"
@@ -54,7 +53,6 @@ type Gateway struct {
 	usage          *usage.Tracker
 	browser         *browser.Browser
 	toolRegistry    *tools.Registry
-	skillRegistry   *skillregistry.Registry
 	subagentManager *subagent.Manager
 	pinManager      *pinManager
 	log             *logger.Logger
@@ -115,14 +113,6 @@ func New(cfg *config.Config) *Gateway {
 	// Initialize metrics collector
 	metricsCollector := metrics.NewCollector()
 
-	// Initialize skill registry (fetch from ClaWHub API, cache for 7 days)
-	home, _ := os.UserHomeDir()
-	skillRegistryCachePath := filepath.Join(home, ".feelpulse", "skills-registry.json")
-	skillReg := skillregistry.NewRegistry(skillRegistryCachePath)
-	if err := skillReg.Load(); err != nil {
-		log.Warn("Failed to load skill registry: %v", err)
-	}
-
 	// Initialize tool registry with built-in tools (exec with security config)
 	toolRegistry := tools.NewRegistry()
 	execCfg := &tools.ExecConfig{
@@ -145,56 +135,35 @@ func New(cfg *config.Config) *Gateway {
 		log.Info("📁 File tools enabled (sandboxed to %s)", workspacePath)
 	}
 
-	// Register read_skill tool (uses skill registry from ClaWHub)
-	if allSkills := skillReg.GetAll(); len(allSkills) > 0 {
-		toolRegistry.Register(&tools.Tool{
-			Name:        "read_skill",
-			Description: fmt.Sprintf("Load skill documentation for specialized CLI tools (%d+ available from ClaWHub). MUST call this FIRST when you see platform-specific operations (GitHub URLs, Docker commands, cloud services, databases, etc). If skill is not installed locally, you can install it via clawhub.", len(allSkills)),
-			Parameters: []tools.Parameter{
-				{
-					Name:        "name",
-					Type:        "string",
-					Description: "Skill slug to load (examples: github, docker, weather, postgres, k8s, aws, terraform). Check ClaWHub registry for full list.",
-					Required:    true,
-				},
+	// Register read_skill tool (loads from bundled skills)
+	toolRegistry.Register(&tools.Tool{
+		Name:        "read_skill",
+		Description: "Load skill documentation for specialized CLI tools (50+ bundled skills). MUST call this FIRST when you see platform-specific operations (GitHub URLs via 'github' skill, Docker commands, weather queries, etc).",
+		Parameters: []tools.Parameter{
+			{
+				Name:        "name",
+				Type:        "string",
+				Description: "Skill name to load (examples: github, docker, weather, clawhub, discord, slack, notion, etc). Try common tool names.",
+				Required:    true,
 			},
-			Handler: func(ctx context.Context, params map[string]any) (string, error) {
-				name, _ := params["name"].(string)
-				if name == "" {
-					return "", fmt.Errorf("skill name is required")
-				}
-				
-				// Try reading from local installation
-				content, err := memMgr.ReadSkill(name)
-				if err == nil {
-					return content, nil
-				}
-				
-				// Not installed locally - get metadata from registry
-				meta := skillReg.Find(name)
-				if meta == nil {
-					return "", fmt.Errorf("skill '%s' not found in ClaWHub registry", name)
-				}
-				
-				// Return installation prompt
-				return fmt.Sprintf(
-					"⚠️ Skill '%s' is not installed locally.\n\n"+
-					"**Description:** %s\n"+
-					"**Latest version:** %s\n\n"+
-					"To use this skill, you need to install it first:\n"+
-					"```bash\n"+
-					"clawhub install %s\n"+
-					"```\n\n"+
-					"Would you like me to install this skill for you?",
-					name, meta.Summary, meta.Version, name,
-				), nil
-			},
-		})
-		
-		log.Info("📚 %d skills available from ClaWHub (on-demand loading)", len(allSkills))
-	} else {
-		log.Warn("⚠️ No skills loaded from ClaWHub registry")
-	}
+		},
+		Handler: func(ctx context.Context, params map[string]any) (string, error) {
+			name, _ := params["name"].(string)
+			if name == "" {
+				return "", fmt.Errorf("skill name is required")
+			}
+			
+			// Read from bundled skills
+			content, err := memMgr.ReadSkill(name)
+			if err != nil {
+				return "", fmt.Errorf("skill '%s' not found (try: github, docker, weather, discord, slack, notion, clawhub, etc)", name)
+			}
+			
+			return content, nil
+		},
+	})
+	
+	log.Info("📚 50+ bundled skills available (on-demand loading via read_skill tool)")
 
 	gw := &Gateway{
 		cfg:           cfg,
@@ -207,7 +176,6 @@ func New(cfg *config.Config) *Gateway {
 		limiter:       limiter,
 		usage:         usageTracker,
 		toolRegistry:  toolRegistry,
-		skillRegistry: skillReg,
 		log:           log,
 		metrics:       metricsCollector,
 		startTime:     time.Now(),
@@ -397,11 +365,8 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 	}
 
 	// Inject workspace files into system prompt
-	// Set system prompt builder (memory + skill registry)
 	router.SetSystemPromptBuilder(func(defaultPrompt string) string {
-		base := gw.memory.BuildSystemPrompt(defaultPrompt)
-		skillsSection := gw.skillRegistry.BuildSkillListPrompt()
-		return base + skillsSection
+		return gw.memory.BuildSystemPrompt(defaultPrompt)
 	})
 
 	// Wire up tool registry for agentic tool calling
@@ -605,60 +570,35 @@ func (gw *Gateway) wireCommandHandler() {
 
 // reloadSkills hot-reloads skills after install/update
 func (gw *Gateway) reloadSkills() error {
-	// Reload skill registry from ClaWHub (respects cache TTL)
-	if err := gw.skillRegistry.Load(); err != nil {
-		gw.log.Warn("Failed to reload skill registry: %v", err)
-	}
-
-	// Re-register read_skill tool with updated skill list
-	allSkills := gw.skillRegistry.GetAll()
-	if len(allSkills) > 0 {
-		gw.toolRegistry.Register(&tools.Tool{
-			Name:        "read_skill",
-			Description: fmt.Sprintf("Load skill documentation for specialized CLI tools (%d+ available from ClaWHub). MUST call this FIRST when you see platform-specific operations (GitHub URLs, Docker commands, cloud services, databases, etc). If skill is not installed locally, you can install it via clawhub.", len(allSkills)),
-			Parameters: []tools.Parameter{
-				{
-					Name:        "name",
-					Type:        "string",
-					Description: "Skill slug to load (examples: github, docker, weather, postgres, k8s, aws, terraform). Check ClaWHub registry for full list.",
-					Required:    true,
-				},
+	// Re-register read_skill tool (bundled skills don't need reload, but keep for consistency)
+	gw.toolRegistry.Register(&tools.Tool{
+		Name:        "read_skill",
+		Description: "Load skill documentation for specialized CLI tools (50+ bundled skills). MUST call this FIRST when you see platform-specific operations (GitHub URLs via 'github' skill, Docker commands, weather queries, etc).",
+		Parameters: []tools.Parameter{
+			{
+				Name:        "name",
+				Type:        "string",
+				Description: "Skill name to load (examples: github, docker, weather, clawhub, discord, slack, notion, etc). Try common tool names.",
+				Required:    true,
 			},
-			Handler: func(ctx context.Context, params map[string]any) (string, error) {
-				name, _ := params["name"].(string)
-				if name == "" {
-					return "", fmt.Errorf("skill name is required")
-				}
-				
-				// Try reading from local installation
-				content, err := gw.memory.ReadSkill(name)
-				if err == nil {
-					return content, nil
-				}
-				
-				// Not installed locally - get metadata from registry
-				meta := gw.skillRegistry.Find(name)
-				if meta == nil {
-					return "", fmt.Errorf("skill '%s' not found in ClaWHub registry", name)
-				}
-				
-				// Return installation prompt
-				return fmt.Sprintf(
-					"⚠️ Skill '%s' is not installed locally.\n\n"+
-					"**Description:** %s\n"+
-					"**Latest version:** %s\n\n"+
-					"To use this skill, you need to install it first:\n"+
-					"```bash\n"+
-					"clawhub install %s\n"+
-					"```\n\n"+
-					"Would you like me to install this skill for you?",
-					name, meta.Summary, meta.Version, name,
-				), nil
-			},
-		})
-		
-		gw.log.Info("🔄 Skills reloaded from ClaWHub (%d available)", len(allSkills))
-	}
+		},
+		Handler: func(ctx context.Context, params map[string]any) (string, error) {
+			name, _ := params["name"].(string)
+			if name == "" {
+				return "", fmt.Errorf("skill name is required")
+			}
+			
+			// Read from bundled skills
+			content, err := gw.memory.ReadSkill(name)
+			if err != nil {
+				return "", fmt.Errorf("skill '%s' not found (try: github, docker, weather, discord, slack, notion, clawhub, etc)", name)
+			}
+			
+			return content, nil
+		},
+	})
+	
+	gw.log.Info("🔄 Skills reloaded (50+ bundled skills available)")
 
 	return nil
 }
