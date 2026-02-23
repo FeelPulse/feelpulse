@@ -24,13 +24,6 @@ type Manager struct {
 	soul      string
 	user      string
 	memory    string
-	skills    []skillEntry // loaded skill docs
-}
-
-// skillEntry holds a loaded skill's name and description
-type skillEntry struct {
-	Name        string
-	Description string // first non-empty, non-heading line from SKILL.md
 }
 
 // NewManager creates a new workspace Manager for the given path
@@ -75,44 +68,18 @@ func (m *Manager) Load() error {
 		m.memory = ""
 	}
 
-	// Load skills from skills/ directory
-	m.skills = nil
+	// Auto-install bundled clawhub skill (bootstrap only)
 	skillsDir := filepath.Join(m.path, "skills")
+	clawhubPath := filepath.Join(skillsDir, "clawhub", "SKILL.md")
 	
-	// Auto-install bundled skills if skills directory doesn't exist or is empty
-	needsInstall := false
-	if entries, err := os.ReadDir(skillsDir); err != nil || len(entries) == 0 {
-		needsInstall = true
-	}
-	
-	if needsInstall {
+	// Check if clawhub skill exists
+	if _, err := os.Stat(clawhubPath); os.IsNotExist(err) {
 		// Create skills directory
-		if err := os.MkdirAll(skillsDir, 0755); err == nil {
-			// Copy bundled skills
+		if err := os.MkdirAll(filepath.Join(skillsDir, "clawhub"), 0755); err == nil {
+			// Copy bundled clawhub skill
 			bundled := getBundledSkills()
-			for name, content := range bundled {
-				skillDir := filepath.Join(skillsDir, name)
-				if err := os.MkdirAll(skillDir, 0755); err == nil {
-					skillPath := filepath.Join(skillDir, "SKILL.md")
-					_ = os.WriteFile(skillPath, []byte(content), 0644)
-				}
-			}
-		}
-	}
-	
-	// Load skills metadata
-	if entries, err := os.ReadDir(skillsDir); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			skillPath := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
-			if data, err := os.ReadFile(skillPath); err == nil {
-				desc := extractSkillDescription(string(data))
-				m.skills = append(m.skills, skillEntry{
-					Name:        entry.Name(),
-					Description: desc,
-				})
+			if clawhubContent, ok := bundled["clawhub"]; ok {
+				_ = os.WriteFile(clawhubPath, []byte(clawhubContent), 0644)
 			}
 		}
 	}
@@ -212,15 +179,6 @@ Working directory: %s
 
 All file operations (file_read, file_write, file_list) are sandboxed to this directory.
 Always clone git repos here: git clone <url> %s/<repo-name>`, m.path, m.path))
-
-	// Available skills section
-	if len(m.skills) > 0 {
-		skillsList := "\n\n## Available Skills\n\nUse read_skill to load CLI tool documentation on demand:\n\n"
-		for _, s := range m.skills {
-			skillsList += fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description)
-		}
-		parts = append(parts, skillsList)
-	}
 
 	result := strings.Join(parts, "")
 	// If nothing was added, return default
@@ -432,33 +390,6 @@ func (m *Manager) ReadSkill(name string) (string, error) {
 // Path returns the workspace path
 func (m *Manager) Path() string {
 	return m.path
-}
-
-// ListSkillNames returns the names of all loaded skills
-func (m *Manager) ListSkillNames() []string {
-	names := make([]string, len(m.skills))
-	for i, s := range m.skills {
-		names[i] = s.Name
-	}
-	return names
-}
-
-// SkillInfo contains skill metadata for tool registration
-type SkillInfo struct {
-	Name        string
-	Description string
-}
-
-// GetSkillsInfo returns metadata for all loaded skills
-func (m *Manager) GetSkillsInfo() []SkillInfo {
-	infos := make([]SkillInfo, len(m.skills))
-	for i, s := range m.skills {
-		infos[i] = SkillInfo{
-			Name:        s.Name,
-			Description: s.Description,
-		}
-	}
-	return infos
 }
 
 // bundledSkills contains built-in skills that ship with FeelPulse

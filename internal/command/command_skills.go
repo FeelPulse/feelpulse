@@ -3,7 +3,9 @@ package command
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -73,7 +75,21 @@ func (h *Handler) skillList() string {
 		return "❌ Memory manager not available."
 	}
 
-	skillNames := h.memory.ListSkillNames()
+	// Read skills directory
+	skillsDir := filepath.Join(h.memory.Path(), "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil || len(entries) == 0 {
+		return "📭 No skills installed.\n\nUse `/skill search <query>` to find skills, then `/skill install <name>` to install."
+	}
+
+	// Collect skill names (directories only)
+	var skillNames []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			skillNames = append(skillNames, entry.Name())
+		}
+	}
+
 	if len(skillNames) == 0 {
 		return "📭 No skills installed.\n\nUse `/skill search <query>` to find skills, then `/skill install <name>` to install."
 	}

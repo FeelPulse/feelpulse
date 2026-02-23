@@ -28,6 +28,7 @@ import (
 	"github.com/FeelPulse/feelpulse/internal/metrics"
 	"github.com/FeelPulse/feelpulse/internal/ratelimit"
 	"github.com/FeelPulse/feelpulse/internal/session"
+	"github.com/FeelPulse/feelpulse/internal/skillregistry"
 	"github.com/FeelPulse/feelpulse/internal/store"
 	"github.com/FeelPulse/feelpulse/internal/subagent"
 	"github.com/FeelPulse/feelpulse/internal/tools"
@@ -54,6 +55,7 @@ type Gateway struct {
 	usage          *usage.Tracker
 	browser         *browser.Browser
 	toolRegistry    *tools.Registry
+	skillRegistry   *skillregistry.Registry
 	subagentManager *subagent.Manager
 	pinManager      *pinManager
 	log             *logger.Logger
@@ -114,6 +116,14 @@ func New(cfg *config.Config) *Gateway {
 	// Initialize metrics collector
 	metricsCollector := metrics.NewCollector()
 
+	// Initialize skill registry (fetch from ClaWHub API, cache for 7 days)
+	home, _ := os.UserHomeDir()
+	skillRegistryCachePath := filepath.Join(home, ".feelpulse", "skills-registry.json")
+	skillReg := skillregistry.NewRegistry(skillRegistryCachePath)
+	if err := skillReg.Load(); err != nil {
+		log.Warn("Failed to load skill registry: %v", err)
+	}
+
 	// Initialize tool registry with built-in tools (exec with security config)
 	toolRegistry := tools.NewRegistry()
 	execCfg := &tools.ExecConfig{
@@ -136,22 +146,26 @@ func New(cfg *config.Config) *Gateway {
 		log.Info("📁 File tools enabled (sandboxed to %s)", workspacePath)
 	}
 
-	// Register read_skill tool for on-demand skill loading
-	if skillsList := memMgr.GetSkillsInfo(); len(skillsList) > 0 {
+	// Register read_skill tool (uses skill registry from ClaWHub)
+	if allSkills := skillReg.GetAll(); len(allSkills) > 0 {
 		// Build skill descriptions for tool schema
 		var skillDescs []string
-		for _, s := range skillsList {
-			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Name, s.Description))
+		for _, s := range allSkills {
+			desc := s.Summary
+			if desc == "" {
+				desc = "no description"
+			}
+			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Slug, desc))
 		}
 		
 		toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Load skill documentation for specialized CLI tools. MUST use before GitHub operations (clone, PR, etc). Call this FIRST when you see github.com URLs or need to install packages.",
+			Description: "Load skill documentation for specialized CLI tools. Call this FIRST when you see platform URLs (GitHub, etc) or need specialized commands. If skill is not installed locally, ask user for permission to install it via clawhub.",
 			Parameters: []tools.Parameter{
 				{
 					Name:        "name",
 					Type:        "string",
-					Description: "Skill to load. Available: " + strings.Join(skillDescs, "; "),
+					Description: "Skill slug to load. Available from ClaWHub: " + strings.Join(skillDescs, "; "),
 					Required:    true,
 				},
 			},
@@ -160,32 +174,55 @@ func New(cfg *config.Config) *Gateway {
 				if name == "" {
 					return "", fmt.Errorf("skill name is required")
 				}
-				return memMgr.ReadSkill(name)
+				
+				// Try reading from local installation
+				content, err := memMgr.ReadSkill(name)
+				if err == nil {
+					return content, nil
+				}
+				
+				// Not installed locally - get metadata from registry
+				meta := skillReg.Find(name)
+				if meta == nil {
+					return "", fmt.Errorf("skill '%s' not found in ClaWHub registry", name)
+				}
+				
+				// Return installation prompt
+				return fmt.Sprintf(
+					"⚠️ Skill '%s' is not installed locally.\n\n"+
+					"**Description:** %s\n"+
+					"**Latest version:** %s\n\n"+
+					"To use this skill, you need to install it first:\n"+
+					"```bash\n"+
+					"clawhub install %s\n"+
+					"```\n\n"+
+					"Would you like me to install this skill for you?",
+					name, meta.Summary, meta.Version, name,
+				), nil
 			},
 		})
 		
-		skillNames := make([]string, len(skillsList))
-		for i, s := range skillsList {
-			skillNames[i] = s.Name
-		}
-		log.Info("📚 %d skills available (on-demand): %s", len(skillNames), strings.Join(skillNames, ", "))
+		log.Info("📚 %d skills available from ClaWHub (on-demand loading)", len(allSkills))
+	} else {
+		log.Warn("⚠️ No skills loaded from ClaWHub registry")
 	}
 
 	gw := &Gateway{
-		cfg:          cfg,
-		mux:          http.NewServeMux(),
-		sessions:     sessions,
-		db:           sqliteStore,
-		commands:     command.NewHandler(sessions, cfg),
-		memory:       memMgr,
-		dailylog:     dailylogWriter,
-		limiter:      limiter,
-		usage:        usageTracker,
-		toolRegistry: toolRegistry,
-		log:          log,
-		metrics:      metricsCollector,
-		startTime:    time.Now(),
-		shutdownCh:   make(chan struct{}),
+		cfg:           cfg,
+		mux:           http.NewServeMux(),
+		sessions:      sessions,
+		db:            sqliteStore,
+		commands:      command.NewHandler(sessions, cfg),
+		memory:        memMgr,
+		dailylog:      dailylogWriter,
+		limiter:       limiter,
+		usage:         usageTracker,
+		toolRegistry:  toolRegistry,
+		skillRegistry: skillReg,
+		log:           log,
+		metrics:       metricsCollector,
+		startTime:     time.Now(),
+		shutdownCh:    make(chan struct{}),
 	}
 
 	// Initialize sub-agent manager (callback set later when telegram is ready)
@@ -371,7 +408,12 @@ func (gw *Gateway) initializeAgent(ctx context.Context) {
 	}
 
 	// Inject workspace files into system prompt
-	router.SetSystemPromptBuilder(gw.memory.BuildSystemPrompt)
+	// Set system prompt builder (memory + skill registry)
+	router.SetSystemPromptBuilder(func(defaultPrompt string) string {
+		base := gw.memory.BuildSystemPrompt(defaultPrompt)
+		skillsSection := gw.skillRegistry.BuildSkillListPrompt()
+		return base + skillsSection
+	})
 
 	// Wire up tool registry for agentic tool calling
 	if gw.toolRegistry != nil {
@@ -574,27 +616,32 @@ func (gw *Gateway) wireCommandHandler() {
 
 // reloadSkills hot-reloads skills after install/update
 func (gw *Gateway) reloadSkills() error {
-	// Reload workspace files (including skills)
-	if err := gw.memory.Load(); err != nil {
-		return fmt.Errorf("failed to reload skills: %w", err)
+	// Reload skill registry from ClaWHub (respects cache TTL)
+	if err := gw.skillRegistry.Load(); err != nil {
+		gw.log.Warn("Failed to reload skill registry: %v", err)
 	}
 
 	// Re-register read_skill tool with updated skill list
-	if skillsList := gw.memory.GetSkillsInfo(); len(skillsList) > 0 {
+	allSkills := gw.skillRegistry.GetAll()
+	if len(allSkills) > 0 {
 		// Build skill descriptions for tool schema
 		var skillDescs []string
-		for _, s := range skillsList {
-			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Name, s.Description))
+		for _, s := range allSkills {
+			desc := s.Summary
+			if desc == "" {
+				desc = "no description"
+			}
+			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Slug, desc))
 		}
 		
 		gw.toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Load skill documentation for specialized CLI tools. MUST use before GitHub operations (clone, PR, etc). Call this FIRST when you see github.com URLs or need to install packages.",
+			Description: "Load skill documentation for specialized CLI tools. Call this FIRST when you see platform URLs (GitHub, etc) or need specialized commands. If skill is not installed locally, ask user for permission to install it via clawhub.",
 			Parameters: []tools.Parameter{
 				{
 					Name:        "name",
 					Type:        "string",
-					Description: "Skill to load. Available: " + strings.Join(skillDescs, "; "),
+					Description: "Skill slug to load. Available from ClaWHub: " + strings.Join(skillDescs, "; "),
 					Required:    true,
 				},
 			},
@@ -603,15 +650,35 @@ func (gw *Gateway) reloadSkills() error {
 				if name == "" {
 					return "", fmt.Errorf("skill name is required")
 				}
-				return gw.memory.ReadSkill(name)
+				
+				// Try reading from local installation
+				content, err := gw.memory.ReadSkill(name)
+				if err == nil {
+					return content, nil
+				}
+				
+				// Not installed locally - get metadata from registry
+				meta := gw.skillRegistry.Find(name)
+				if meta == nil {
+					return "", fmt.Errorf("skill '%s' not found in ClaWHub registry", name)
+				}
+				
+				// Return installation prompt
+				return fmt.Sprintf(
+					"⚠️ Skill '%s' is not installed locally.\n\n"+
+					"**Description:** %s\n"+
+					"**Latest version:** %s\n\n"+
+					"To use this skill, you need to install it first:\n"+
+					"```bash\n"+
+					"clawhub install %s\n"+
+					"```\n\n"+
+					"Would you like me to install this skill for you?",
+					name, meta.Summary, meta.Version, name,
+				), nil
 			},
 		})
 		
-		skillNames := make([]string, len(skillsList))
-		for i, s := range skillsList {
-			skillNames[i] = s.Name
-		}
-		gw.log.Info("🔄 Skills reloaded: %s", strings.Join(skillNames, ", "))
+		gw.log.Info("🔄 Skills reloaded from ClaWHub (%d available)", len(allSkills))
 	}
 
 	return nil
