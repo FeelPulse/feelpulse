@@ -137,12 +137,23 @@ func New(cfg *config.Config) *Gateway {
 	}
 
 	// Register read_skill tool for on-demand skill loading
-	if skillNames := memMgr.ListSkillNames(); len(skillNames) > 0 {
+	if skillsList := memMgr.GetSkillsInfo(); len(skillsList) > 0 {
+		// Build skill descriptions for tool schema
+		var skillDescs []string
+		for _, s := range skillsList {
+			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Name, s.Description))
+		}
+		
 		toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Read the full documentation for a skill. Available skills: " + strings.Join(skillNames, ", "),
+			Description: "Load CLI tool documentation before using specialized commands. Returns step-by-step usage guide.",
 			Parameters: []tools.Parameter{
-				{Name: "name", Type: "string", Description: "Skill name to read", Required: true},
+				{
+					Name:        "name",
+					Type:        "string",
+					Description: "Skill to load. Available: " + strings.Join(skillDescs, "; "),
+					Required:    true,
+				},
 			},
 			Handler: func(ctx context.Context, params map[string]any) (string, error) {
 				name, _ := params["name"].(string)
@@ -152,6 +163,11 @@ func New(cfg *config.Config) *Gateway {
 				return memMgr.ReadSkill(name)
 			},
 		})
+		
+		skillNames := make([]string, len(skillsList))
+		for i, s := range skillsList {
+			skillNames[i] = s.Name
+		}
 		log.Info("📚 %d skills available (on-demand): %s", len(skillNames), strings.Join(skillNames, ", "))
 	}
 
@@ -564,12 +580,23 @@ func (gw *Gateway) reloadSkills() error {
 	}
 
 	// Re-register read_skill tool with updated skill list
-	if skillNames := gw.memory.ListSkillNames(); len(skillNames) > 0 {
+	if skillsList := gw.memory.GetSkillsInfo(); len(skillsList) > 0 {
+		// Build skill descriptions for tool schema
+		var skillDescs []string
+		for _, s := range skillsList {
+			skillDescs = append(skillDescs, fmt.Sprintf("%s (%s)", s.Name, s.Description))
+		}
+		
 		gw.toolRegistry.Register(&tools.Tool{
 			Name:        "read_skill",
-			Description: "Read the full documentation for a skill. Available skills: " + strings.Join(skillNames, ", "),
+			Description: "Load CLI tool documentation before using specialized commands. Returns step-by-step usage guide.",
 			Parameters: []tools.Parameter{
-				{Name: "name", Type: "string", Description: "Skill name to read", Required: true},
+				{
+					Name:        "name",
+					Type:        "string",
+					Description: "Skill to load. Available: " + strings.Join(skillDescs, "; "),
+					Required:    true,
+				},
 			},
 			Handler: func(ctx context.Context, params map[string]any) (string, error) {
 				name, _ := params["name"].(string)
@@ -579,6 +606,11 @@ func (gw *Gateway) reloadSkills() error {
 				return gw.memory.ReadSkill(name)
 			},
 		})
+		
+		skillNames := make([]string, len(skillsList))
+		for i, s := range skillsList {
+			skillNames[i] = s.Name
+		}
 		gw.log.Info("🔄 Skills reloaded: %s", strings.Join(skillNames, ", "))
 	}
 

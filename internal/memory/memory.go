@@ -192,13 +192,9 @@ Always clone git repos here: git clone <url> %s/<repo-name>`, m.path, m.path))
 
 	// Available skills section
 	if len(m.skills) > 0 {
-		skillsList := "\n\n## Available Skills\n\n**IMPORTANT: Use read_skill(\"name\") to load documentation BEFORE using basic commands.**\n\n"
+		skillsList := "\n\n## Available Skills\n\nUse read_skill to load CLI tool documentation on demand:\n\n"
 		for _, s := range m.skills {
 			skillsList += fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description)
-			// Add usage hints for key skills
-			if s.Name == "github" {
-				skillsList += "  **REQUIRED for ANY GitHub URL** - Load this skill immediately when you see github.com links\n"
-			}
 		}
 		parts = append(parts, skillsList)
 	}
@@ -422,6 +418,24 @@ func (m *Manager) ListSkillNames() []string {
 		names[i] = s.Name
 	}
 	return names
+}
+
+// SkillInfo contains skill metadata for tool registration
+type SkillInfo struct {
+	Name        string
+	Description string
+}
+
+// GetSkillsInfo returns metadata for all loaded skills
+func (m *Manager) GetSkillsInfo() []SkillInfo {
+	infos := make([]SkillInfo, len(m.skills))
+	for i, s := range m.skills {
+		infos[i] = SkillInfo{
+			Name:        s.Name,
+			Description: s.Description,
+		}
+	}
+	return infos
 }
 
 // bundledSkills contains built-in skills that ship with FeelPulse
