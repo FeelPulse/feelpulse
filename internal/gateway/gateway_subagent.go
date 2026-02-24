@@ -269,7 +269,7 @@ func (gw *Gateway) createSubAgentChatFunc() subagent.ChatWithToolsFunc {
 		}
 
 		// Run the agentic loop
-		return anthropicClient.ChatWithTools(messages, systemPrompt, anthropicTools, executor, maxIterations, nil)
+		return anthropicClient.ChatWithTools(messages, systemPrompt, anthropicTools, executor, maxIterations, nil, nil)
 	}
 }
 

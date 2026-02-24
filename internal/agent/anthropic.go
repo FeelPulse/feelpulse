@@ -490,6 +490,7 @@ func (c *AnthropicClient) ChatWithTools(
 	executor ToolExecutor,
 	maxIterations int,
 	callback StreamCallback,
+	onIterationText func(string),
 ) (*types.AgentResponse, error) {
 	if maxIterations <= 0 {
 		maxIterations = 10
@@ -531,6 +532,9 @@ func (c *AnthropicClient) ChatWithTools(
 		totalUsage.OutputTokens += usage.OutputTokens
 		if textContent != "" {
 			textBlocks = append(textBlocks, textContent)
+			if onIterationText != nil {
+				onIterationText(textContent)
+			}
 		}
 		
 		logger.Debug("🤖 [LLM] Response received: text_len=%d, tools_requested=%d, stop_reason=%s, tokens_in=%d, tokens_out=%d", 

@@ -871,8 +871,14 @@ func (gw *Gateway) handleMessage(msg *types.Message) (reply *types.Message, err 
 		}
 	}()
 
+	// Extract immediate sender from message metadata (set by channel layer)
+	var onIterationText func(string)
+	if sender, ok := msg.Metadata["immediate_sender"].(func(string)); ok {
+		onIterationText = sender
+	}
+
 	// Route to agent with full history
-	reply, err = ctx.router.ProcessWithHistory(ctx.history)
+	reply, err = ctx.router.ProcessWithHistoryStream(ctx.history, nil, onIterationText)
 	if err != nil {
 		ctx.reqLog.Error("Agent error: %v", err)
 		return &types.Message{

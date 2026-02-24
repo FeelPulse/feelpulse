@@ -312,6 +312,17 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 
 	t.log.Debug("📨 [%s] %s: %s", msg.Channel, msg.From, msg.Text)
 
+	// Provide an immediate sender so the agentic loop can push text blocks in real-time
+	chatID := tgMsg.Chat.ID
+	msg.Metadata["immediate_sender"] = func(text string) {
+		parts := SplitLongMessage(text, SafeMessageLength)
+		for _, part := range parts {
+			if err := t.SendMessage(chatID, part, true); err != nil {
+				t.log.Error("❌ Failed to send intermediate message: %v", err)
+			}
+		}
+	}
+
 	// Keep typing indicator alive during processing
 	stopTyping := make(chan struct{})
 	go func() {
@@ -327,7 +338,7 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 			}
 		}
 	}()
-	
+
 	// Call handler
 	reply, err := t.handler(msg)
 	close(stopTyping)
@@ -338,7 +349,10 @@ func (t *TelegramBot) handleMessage(ctx context.Context, tgMsg *TelegramMessage)
 	}
 
 	if reply != nil && reply.Text != "" {
-		t.sendReply(tgMsg.Chat.ID, reply)
+		// Skip if already sent in real-time during the agentic loop
+		if sent, _ := reply.Metadata["realtime_sent"].(bool); !sent {
+			t.sendReply(tgMsg.Chat.ID, reply)
+		}
 	}
 }
 

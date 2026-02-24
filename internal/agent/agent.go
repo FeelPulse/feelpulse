@@ -121,11 +121,11 @@ func (r *Router) Process(msg *types.Message) (*types.Message, error) {
 
 // ProcessWithHistory handles a message with full conversation history
 func (r *Router) ProcessWithHistory(messages []types.Message) (*types.Message, error) {
-	return r.ProcessWithHistoryStream(messages, nil)
+	return r.ProcessWithHistoryStream(messages, nil, nil)
 }
 
-// ProcessWithHistoryStream handles messages with optional streaming callback
-func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback StreamCallback) (*types.Message, error) {
+// ProcessWithHistoryStream handles messages with optional streaming callback and iteration text callback
+func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback StreamCallback, onIterationText func(string)) (*types.Message, error) {
 	if r.agent == nil {
 		return nil, fmt.Errorf("no agent configured")
 	}
@@ -159,7 +159,7 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 		executor := r.createToolExecutor(sessionKey)
 
 		// Use agentic loop with tools
-		resp, err = anthropicClient.ChatWithTools(messages, systemPrompt, anthropicTools, executor, 10, callback)
+		resp, err = anthropicClient.ChatWithTools(messages, systemPrompt, anthropicTools, executor, 10, callback, onIterationText)
 	} else if callback != nil {
 		// Use streaming without tools
 		resp, err = r.agent.ChatStream(messages, systemPrompt, callback)
@@ -181,7 +181,11 @@ func (r *Router) ProcessWithHistoryStream(messages []types.Message, callback Str
 		"input_tokens":  resp.Usage.InputTokens,
 		"output_tokens": resp.Usage.OutputTokens,
 	}
-	if len(resp.TextBlocks) > 1 {
+	if onIterationText != nil {
+		// Real-time sending was used; caller should not re-send
+		meta["realtime_sent"] = true
+	} else if len(resp.TextBlocks) > 1 {
+		// Fallback: send each block separately at end of turn
 		meta["text_blocks"] = resp.TextBlocks
 	}
 	reply := &types.Message{

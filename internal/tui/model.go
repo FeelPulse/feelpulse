@@ -473,7 +473,7 @@ func (m Model) sendToAIStream() tea.Cmd {
 			resp, err := m.agent.ProcessWithHistoryStream(messages, func(delta string) {
 				// Send each delta to the TUI via channel
 				m.msgCh <- streamMsg{delta: delta}
-			})
+			}, nil)
 
 			if err != nil {
 				m.msgCh <- responseMsg{err: err}
