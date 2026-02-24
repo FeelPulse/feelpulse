@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/FeelPulse/feelpulse/pkg/types"
@@ -72,10 +73,31 @@ func (s *SQLiteStore) Save(key string, messages []types.Message, model string) e
 	return s.SaveWithProfile(key, messages, model, "")
 }
 
+// stripFuncMetadata returns a copy of messages with func-typed metadata values removed.
+// json.Marshal cannot serialize func values (e.g. immediate_sender callbacks).
+func stripFuncMetadata(messages []types.Message) []types.Message {
+	result := make([]types.Message, len(messages))
+	for i, msg := range messages {
+		result[i] = msg
+		if len(msg.Metadata) == 0 {
+			continue
+		}
+		clean := make(map[string]any, len(msg.Metadata))
+		for k, v := range msg.Metadata {
+			if v != nil && reflect.TypeOf(v).Kind() == reflect.Func {
+				continue
+			}
+			clean[k] = v
+		}
+		result[i].Metadata = clean
+	}
+	return result
+}
+
 // SaveWithProfile persists a session with model and profile to the database (upsert)
 func (s *SQLiteStore) SaveWithProfile(key string, messages []types.Message, model, profile string) error {
-	// Serialize messages to JSON
-	data, err := json.Marshal(messages)
+	// Serialize messages to JSON, stripping non-serializable func values from metadata
+	data, err := json.Marshal(stripFuncMetadata(messages))
 	if err != nil {
 		return fmt.Errorf("failed to marshal messages: %w", err)
 	}
