@@ -32,6 +32,23 @@ metadata:
 
 Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
 
+## Cloning Repos
+
+```bash
+gh repo clone owner/repo
+# or with a full URL:
+gh repo clone https://github.com/owner/repo
+```
+
+To clone into a specific directory:
+
+```bash
+gh repo clone owner/repo /path/to/destination
+```
+
+Before cloning, check authentication status with `gh auth status`.
+If not authenticated, ask the user to provide a GitHub token or run `gh auth login` before proceeding.
+
 ## Pull Requests
 
 Check CI status on a PR:
