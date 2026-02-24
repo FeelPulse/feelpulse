@@ -47,7 +47,7 @@ gh repo clone owner/repo /path/to/destination
 ```
 
 Before cloning, check authentication status with `gh auth status`.
-If not authenticated, ask the user to provide a GitHub token or run `gh auth login` before proceeding.
+If not authenticated, STOP immediately and ask the user to provide a GitHub token or run `gh auth login`. Do NOT proceed with cloning until the user confirms authentication is set up.
 
 ## Pull Requests
 
