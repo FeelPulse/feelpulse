@@ -83,8 +83,8 @@ type SSEContentBlock struct {
 
 // SSEMessage represents message info in streaming
 type SSEMessage struct {
-	ID    string         `json:"id,omitempty"`
-	Model string         `json:"model,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Model string          `json:"model,omitempty"`
 	Usage *AnthropicUsage `json:"usage,omitempty"`
 }
 
@@ -281,7 +281,6 @@ func (c *AnthropicClient) ChatWithSystem(messages []types.Message, systemPrompt 
 		systemPrompt = DefaultSystemPrompt
 	}
 
-
 	// Build request
 	reqBody := AnthropicRequest{
 		Model:     c.model,
@@ -360,7 +359,6 @@ func (c *AnthropicClient) ChatStream(messages []types.Message, systemPrompt stri
 	if systemPrompt == "" {
 		systemPrompt = DefaultSystemPrompt
 	}
-
 
 	// Build request with streaming enabled
 	reqBody := AnthropicRequest{
@@ -502,7 +500,6 @@ func (c *AnthropicClient) ChatWithTools(
 		systemPrompt = DefaultSystemPrompt
 	}
 
-
 	var totalUsage types.Usage
 	var textBlocks []string
 	var model string
@@ -536,10 +533,10 @@ func (c *AnthropicClient) ChatWithTools(
 				onIterationText(textContent)
 			}
 		}
-		
-		logger.Debug("🤖 [LLM] Response received: text_len=%d, tools_requested=%d, stop_reason=%s, tokens_in=%d, tokens_out=%d", 
+
+		logger.Debug("🤖 [LLM] Response received: text_len=%d, tools_requested=%d, stop_reason=%s, tokens_in=%d, tokens_out=%d",
 			len(textContent), len(toolUseBlocks), stopReason, usage.InputTokens, usage.OutputTokens)
-		
+
 		if textContent != "" {
 			logger.Debug("🤖 [LLM] Text content: %s", truncateString(textContent, 200))
 		}
@@ -548,7 +545,7 @@ func (c *AnthropicClient) ChatWithTools(
 			logger.Debug("🤖 [LLM] Iteration complete, no more tools needed (stop_reason=%s)", stopReason)
 			break
 		}
-		
+
 		logger.Debug("🤖 [LLM] Claude wants to use %d tools, continuing to iteration %d", len(toolUseBlocks), iteration+2)
 
 		// Build assistant content blocks for conversation history
@@ -601,9 +598,6 @@ func (c *AnthropicClient) ChatWithTools(
 				logger.Debug("🔧 [tool] %s → error: %v", toolUse.Name, err)
 			} else {
 				logger.Debug("🔧 [tool] %s → success (%d chars)", toolUse.Name, len(result))
-				if len(result) > 0 {
-					logger.Debug("🔧 [tool] %s result preview: %s", toolUse.Name, truncateString(result, 150))
-				}
 			}
 
 			toolResults = append(toolResults, ContentBlock{
@@ -612,7 +606,7 @@ func (c *AnthropicClient) ChatWithTools(
 				Content:   result,
 			})
 		}
-		
+
 		logger.Debug("🤖 [LLM] Sending %d tool results back to Claude", len(toolResults))
 
 		anthropicMsgs = append(anthropicMsgs, AnthropicMessage{
@@ -620,7 +614,7 @@ func (c *AnthropicClient) ChatWithTools(
 			Content: toolResults,
 		})
 	}
-	
+
 	finalResponse := strings.Join(textBlocks, "\n\n")
 	logger.Debug("🤖 [LLM] ChatWithTools complete: total_text_len=%d, blocks=%d, total_tokens_in=%d, total_tokens_out=%d, model=%s",
 		len(finalResponse), len(textBlocks), totalUsage.InputTokens, totalUsage.OutputTokens, model)
@@ -671,7 +665,7 @@ func (c *AnthropicClient) callAPIStreamTools(reqBody AnthropicRequest, callback 
 
 	// Parse SSE stream, tracking current content block
 	var fullText strings.Builder
-	var currentBlockType string   // "text" or "tool_use"
+	var currentBlockType string // "text" or "tool_use"
 	var currentToolID string
 	var currentToolName string
 	var currentToolInput strings.Builder
